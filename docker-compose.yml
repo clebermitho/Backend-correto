@@ -1,0 +1,76 @@
+# docker-compose.yml — Chatplay Assistant v1
+# Sobe: PostgreSQL + Backend Node.js + Admin React
+#
+# Uso:
+#   docker-compose up -d           # subir tudo
+#   docker-compose logs -f backend # ver logs do backend
+#   docker-compose down            # parar
+#   docker-compose down -v         # parar e remover volumes (APAGA BD)
+
+version: "3.9"
+
+services:
+
+  # ─── PostgreSQL ────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: chatplay_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     ${POSTGRES_USER:-chatplay}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chatplay_dev_senha}
+      POSTGRES_DB:       ${POSTGRES_DB:-chatplay_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-chatplay}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ─── Backend Node.js ────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: chatplay_backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV:      production
+      PORT:          3001
+      DATABASE_URL:  postgresql://${POSTGRES_USER:-chatplay}:${POSTGRES_PASSWORD:-chatplay_dev_senha}@postgres:5432/${POSTGRES_DB:-chatplay_db}
+      JWT_SECRET:    ${JWT_SECRET:?JWT_SECRET obrigatório}
+      JWT_TTL_HOURS: ${JWT_TTL_HOURS:-8}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?OPENAI_API_KEY obrigatório}
+      ADMIN_BOOTSTRAP_SECRET: ${ADMIN_BOOTSTRAP_SECRET:-bootstrap_secret_dev}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:3000}
+    ports:
+      - "3001:3001"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3001/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── Admin React (serve build estático via Nginx) ──────────
+  admin:
+    image: nginx:alpine
+    container_name: chatplay_admin
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    volumes:
+      - ./admin-dist:/usr/share/nginx/html:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "5173:80"
+
+volumes:
+  postgres_data:
+    driver: local

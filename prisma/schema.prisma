@@ -1,0 +1,218 @@
+// Chatplay Assistant — Schema Prisma v1
+// Banco: PostgreSQL
+// ORM:   Prisma 5
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────
+// ORGANIZATIONS — empresa/conselho que usa o sistema
+// ─────────────────────────────────────────────
+model Organization {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique           // ex: "coren-sp"
+  settings    Json     @default("{}")    // configurações globais da org
+  monthlyQuota Int     @default(100000)  // quota mensal de tokens
+  usedTokens   Int     @default(0)       // tokens usados no mês atual
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  users         User[]
+  usageEvents   UsageEvent[]
+  suggestions   Suggestion[]
+  templates     Template[]
+  knowledgeBases KnowledgeBase[]
+  settings_rows  Setting[]
+
+  @@map("organizations")
+}
+
+// ─────────────────────────────────────────────
+// USERS — atendentes + admins
+// ─────────────────────────────────────────────
+model User {
+  id             String   @id @default(cuid())
+  organizationId String
+  email          String   @unique
+  passwordHash   String
+  name           String
+  role           UserRole @default(AGENT)   // AGENT | ADMIN | SUPER_ADMIN
+  isActive       Boolean  @default(true)
+  lastSeenAt     DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization      Organization       @relation(fields: [organizationId], references: [id])
+  sessions          Session[]
+  usageEvents       UsageEvent[]
+  suggestionsFeedback SuggestionFeedback[]
+
+  @@map("users")
+}
+
+enum UserRole {
+  AGENT
+  ADMIN
+  SUPER_ADMIN
+}
+
+// ─────────────────────────────────────────────
+// SESSIONS — tokens JWT revogáveis (Access & Refresh)
+// ─────────────────────────────────────────────
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  type      TokenType @default(ACCESS)
+  isRevoked Boolean  @default(false)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+  @@map("sessions")
+}
+
+enum TokenType {
+  ACCESS
+  REFRESH
+}
+
+// ─────────────────────────────────────────────
+// SUGGESTIONS — sugestões geradas pela IA
+// ─────────────────────────────────────────────
+model Suggestion {
+  id             String           @id @default(cuid())
+  organizationId String
+  category       String           // NEGOCIACAO | SUSPENSAO | CANCELAMENTO | DUVIDA | RECLAMACAO | OUTROS
+  text           String
+  score          Float            @default(0)
+  usageCount     Int              @default(0)
+  source         SuggestionSource @default(AI)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  organization Organization        @relation(fields: [organizationId], references: [id])
+  feedbacks    SuggestionFeedback[]
+
+  @@index([organizationId, category])
+  @@map("suggestions")
+}
+
+enum SuggestionSource {
+  AI        // gerada pela OpenAI
+  TEMPLATE  // derivada de template aprendido
+  MANUAL    // criada por admin
+}
+
+// ─────────────────────────────────────────────
+// SUGGESTION_FEEDBACK — aprovação / reprovação
+// ─────────────────────────────────────────────
+model SuggestionFeedback {
+  id           String       @id @default(cuid())
+  suggestionId String
+  userId       String
+  type         FeedbackType // APPROVED | REJECTED | USED | IGNORED
+  reason       String?      // motivo da reprovação (opcional)
+  createdAt    DateTime     @default(now())
+
+  suggestion Suggestion @relation(fields: [suggestionId], references: [id], onDelete: Cascade)
+  user       User       @relation(fields: [userId], references: [id])
+
+  @@index([suggestionId])
+  @@index([userId])
+  @@map("suggestion_feedback")
+}
+
+enum FeedbackType {
+  APPROVED
+  REJECTED
+  USED
+  IGNORED
+}
+
+// ─────────────────────────────────────────────
+// USAGE_EVENTS — auditoria de tudo que acontece
+// ─────────────────────────────────────────────
+model UsageEvent {
+  id             String    @id @default(cuid())
+  organizationId String
+  userId         String?   // null = sistema
+  eventType      String    // suggestion.generated | suggestion.used | chat.message | api.called | auth.login ...
+  payload        Json      @default("{}")
+  ipAddress      String?
+  userAgent      String?
+  createdAt      DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  user         User?        @relation(fields: [userId], references: [id])
+
+  @@index([organizationId, eventType])
+  @@index([userId])
+  @@index([createdAt])
+  @@map("usage_events")
+}
+
+// ─────────────────────────────────────────────
+// TEMPLATES — respostas que funcionaram bem (aprendizado)
+// ─────────────────────────────────────────────
+model Template {
+  id             String   @id @default(cuid())
+  organizationId String
+  category       String
+  text           String
+  score          Float    @default(0)
+  usageCount     Int      @default(0)
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId, category])
+  @@map("templates")
+}
+
+// ─────────────────────────────────────────────
+// SETTINGS — configurações por organização
+// ─────────────────────────────────────────────
+model Setting {
+  id             String   @id @default(cuid())
+  organizationId String
+  key            String
+  value          Json
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@unique([organizationId, key])
+  @@map("settings")
+}
+
+// ─────────────────────────────────────────────
+// KNOWLEDGE_BASES — bases de conhecimento (Coren, Chat)
+// ─────────────────────────────────────────────
+model KnowledgeBase {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  sourceUrl      String?  // URL externa (GitHub raw, etc.)
+  content        Json     @default("{}")
+  embedding      Unsupported("vector(1536)")? // pgvector embedding
+  lastSyncedAt   DateTime?
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@map("knowledge_bases")
+}
