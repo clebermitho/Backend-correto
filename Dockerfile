@@ -27,5 +27,5 @@ COPY --from=builder /app/package.json ./
 # Expor porta
 EXPOSE 3001
 
-# Entrypoint: apply migrations THEN start
-CMD ["dumb-init", "sh", "-c", "npx prisma migrate deploy && node src/index.js"]
+# Entrypoint: force schema sync THEN start
+CMD ["dumb-init", "sh", "-c", "npx prisma db push --accept-data-loss && node src/index.js"]

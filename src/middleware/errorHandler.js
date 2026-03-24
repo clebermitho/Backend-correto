@@ -54,6 +54,10 @@ function errorHandler(err, req, res, _next) {
     return res.status(400).json({ error: 'Dados inválidos para a operação no banco de dados.' });
   }
   if (err.name === 'PrismaClientKnownRequestError') {
+    if (err.code === 'P2022') {
+      logger.error({ event: 'prisma.missing_column', meta: err.meta, path: req?.path });
+      return res.status(500).json({ error: `Erro de esquema: a coluna '${err.meta?.column}' não foi encontrada no banco de dados. O sistema tentará sincronizar no próximo reinício.` });
+    }
     logger.warn({ event: 'prisma.known_error', code: err.code, path: req?.path, err: err.message?.slice(0, 200) });
     return res.status(400).json({ error: `Erro de banco de dados (${err.code}).` });
   }
