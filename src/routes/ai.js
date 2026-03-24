@@ -65,11 +65,11 @@ router.post('/suggestions', requireAuth, async (req, res, next) => {
 
     const temperature = settings['suggestion.temperature'] !== undefined
       ? Number(settings['suggestion.temperature'])
-      : undefined;
+      : 0.2;
 
     const maxTokens = settings['suggestion.maxTokens'] !== undefined
       ? Number(settings['suggestion.maxTokens'])
-      : undefined;
+      : 500;
 
     const promptTemplate = typeof settings['prompt.suggestions'] === 'string'
       ? settings['prompt.suggestions']
@@ -177,7 +177,7 @@ router.post('/chat', requireAuth, async (req, res, next) => {
       systemPrompt: z.string().default(''),
     });
 
-    const { message, history, context, knowledge, systemPrompt } = schema.parse(req.body);
+    const { message, history, context } = schema.parse(req.body);
 
     const settingsRows = await prisma.setting.findMany({
       where:  { organizationId: req.organizationId },
@@ -191,19 +191,17 @@ router.post('/chat', requireAuth, async (req, res, next) => {
 
     const temperature = settings['suggestion.temperature'] !== undefined
       ? Number(settings['suggestion.temperature'])
-      : undefined;
+      : 0.2;
 
     const maxTokens = settings['suggestion.maxTokens'] !== undefined
       ? Number(settings['suggestion.maxTokens'])
-      : undefined;
+      : 600;
 
     const systemPromptTemplate = typeof settings['prompt.chat'] === 'string' && settings['prompt.chat'].trim().length > 0
       ? settings['prompt.chat']
       : '';
 
-    const effectiveSystemPrompt = systemPromptTemplate ? '' : systemPrompt;
-
-    // Buscar bases de conhecimento salvas no banco (complementam as enviadas pela extensão)
+    // Buscar bases de conhecimento salvas no banco
     const kbs = await prisma.knowledgeBase.findMany({
       where: { organizationId: req.organizationId, isActive: true },
     });
@@ -213,8 +211,6 @@ router.post('/chat', requireAuth, async (req, res, next) => {
       message,
       history,
       context,
-      knowledge,
-      systemPrompt: effectiveSystemPrompt,
       systemPromptTemplate,
       dbKnowledgeBases,
       model,

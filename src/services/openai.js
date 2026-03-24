@@ -221,8 +221,6 @@ async function generateChatReply({
   message,
   history          = [],
   context          = '',
-  knowledge        = {},
-  systemPrompt     = '',
   systemPromptTemplate = '',
   dbKnowledgeBases = {},
   model,
@@ -233,8 +231,8 @@ async function generateChatReply({
     Object.entries(dbKnowledgeBases || {}).map(([k, v]) => [String(k).toLowerCase().trim(), v])
   );
 
-  const baseCorenObj = knowledge?.coren ?? kb.coren ?? kb['base_coren'] ?? kb['base coren'];
-  const baseSistObj  = knowledge?.sistema ?? kb.sistema ?? kb.chat ?? kb['base_sistema'] ?? kb['base sistema'];
+  const baseCorenObj = kb.coren ?? kb['base_coren'] ?? kb['base coren'];
+  const baseSistObj  = kb.sistema ?? kb.chat ?? kb['base_sistema'] ?? kb['base sistema'];
 
   const baseCoren = baseCorenObj ? JSON.stringify(baseCorenObj, null, 2) : '(não carregada)';
   const baseSist  = baseSistObj  ? JSON.stringify(baseSistObj,  null, 2) : '(não carregada)';
@@ -254,8 +252,6 @@ async function generateChatReply({
       MESSAGE:      message,
       HISTORY:      historyText,
     }).trim();
-  } else if (systemPrompt && systemPrompt.trim().length > 50) {
-    systemContent = systemPrompt;
   } else {
     systemContent = `Você é um assistente inteligente do Coren que ajuda operadores humanos.
 
@@ -294,8 +290,8 @@ IMPORTANTE: Responda de forma natural, clara e útil. Use emojis quando apropria
     tokens:   data.usage?.total_tokens,
     model:    data.model,
     hasCtx:   context.length > 0,
-    hasKnow:  !!(knowledge?.coren || knowledge?.sistema),
-    hasSysP:  systemPrompt.length > 50,
+    hasKnow:  !!(baseCorenObj || baseSistObj),
+    hasSysP:  systemPromptTemplate.trim().length > 0,
   });
 
   return {
