@@ -182,8 +182,17 @@ router.post('/register', async (req, res, next) => {
 
     // Segurança: se já houver usuários, exige o segredo. Se for o primeiro, permite (setup inicial).
     if (!isFirstRun && data.adminSecret !== process.env.ADMIN_BOOTSTRAP_SECRET) {
-      logger.warn({ event: 'auth.register_forbidden', email: data.email, ip: req.ip, isFirstRun });
-      return res.status(403).json({ error: 'Registro bloqueado. adminSecret necessário.' });
+      logger.warn({ 
+        event: 'auth.register_forbidden', 
+        email: data.email, 
+        reason: 'admin_secret_required_or_mismatch',
+        userCount,
+        ip: req.ip 
+      });
+      return res.status(403).json({ 
+        error: 'Registro bloqueado.', 
+        details: isFirstRun ? 'Erro interno de configuração.' : 'O banco já possui usuários. Informe o adminSecret para criar novos administradores.' 
+      });
     }
 
     const existing = await prisma.user.findUnique({ where: { email: data.email } });
