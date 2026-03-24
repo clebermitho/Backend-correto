@@ -77,7 +77,14 @@ async function generateSuggestions({
   topExamples    = [],
   avoidPatterns  = [],
   knowledgeBases = {},
+  model,
+  temperature,
+  maxTokens,
 }) {
+  const kb = Object.fromEntries(
+    Object.entries(knowledgeBases || {}).map(([k, v]) => [String(k).toLowerCase().trim(), v])
+  );
+
   const avoidBlock = avoidPatterns.length > 0
     ? `\n🚫 EVITE estas palavras/frases reprovadas: ${avoidPatterns.map(p => `"${p}"`).join(', ')}`
     : '';
@@ -86,8 +93,11 @@ async function generateSuggestions({
     ? `\n📚 Exemplos aprovados para ${category}:\n${topExamples.map(e => `- ${e}`).join('\n')}`
     : '';
 
-  const baseCoren = knowledgeBases.coren ? JSON.stringify(knowledgeBases.coren, null, 2) : '(não carregada)';
-  const baseChat  = knowledgeBases.chat  ? JSON.stringify(knowledgeBases.chat,  null, 2) : '(não carregada)';
+  const baseCorenRaw = kb.coren ?? kb['base_coren'] ?? kb['base coren'];
+  const baseSistRaw  = kb.chat ?? kb.sistema ?? kb['base_sistema'] ?? kb['base sistema'];
+
+  const baseCoren = baseCorenRaw ? JSON.stringify(baseCorenRaw, null, 2) : '(não carregada)';
+  const baseChat  = baseSistRaw  ? JSON.stringify(baseSistRaw,  null, 2) : '(não carregada)';
 
   const prompt = `Você é um assistente especializado do Coren (Conselho Regional de Enfermagem).
 
@@ -109,6 +119,9 @@ ${examplesBlock}
 CONTEXTO DA CONVERSA:
 ${context}
 
+PERGUNTA PRINCIPAL:
+${question}
+
 Gere exatamente 3 respostas profissionais e objetivas para esta situação.
 Separe cada resposta por uma linha em branco.
 NÃO use numeração nem prefixos como "Resposta 1:".`;
@@ -120,8 +133,9 @@ NÃO use numeração nem prefixos como "Resposta 1:".`;
       { role: 'system', content: 'Gerador de respostas institucionais do Coren' },
       { role: 'user',   content: prompt },
     ],
-    temperature: 0.7,
-    max_tokens:  500,
+    model:       model || undefined,
+    temperature: temperature ?? 0.7,
+    max_tokens:  maxTokens ?? 500,
   });
 
   const latencyMs = Date.now() - start;

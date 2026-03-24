@@ -71,13 +71,28 @@ router.post('/', requireAuth, async (req, res, next) => {
       data:  { score: newScore, usageCount: { increment: usageIncr } },
     });
 
-    // Promover para template se score >= 0.8 e usageCount >= 3 (aprendizado automático)
+    const settingsRows = await prisma.setting.findMany({
+      where:  { organizationId: req.organizationId },
+      select: { key: true, value: true },
+    });
+    const settings = Object.fromEntries(settingsRows.map(r => [r.key, r.value]));
+
+    const learnFromApproved = settings['suggestion.learnFromApproved'] !== undefined
+      ? Boolean(settings['suggestion.learnFromApproved'])
+      : true;
+
+    const minApprovalScoreToLearn = settings['suggestion.minApprovalScoreToLearn'] !== undefined
+      ? Number(settings['suggestion.minApprovalScoreToLearn'])
+      : 0.8;
+
+    // Promover para template se score >= minApprovalScoreToLearn e usageCount >= 3 (aprendizado automático)
     const updatedSuggestion = await prisma.suggestion.findUnique({
       where: { id: data.suggestionId },
     });
     if (
       updatedSuggestion &&
-      updatedSuggestion.score >= 0.8 &&
+      learnFromApproved &&
+      updatedSuggestion.score >= minApprovalScoreToLearn &&
       updatedSuggestion.usageCount >= 3
     ) {
       // Verifica se já existe template idêntico

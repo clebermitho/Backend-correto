@@ -46,13 +46,77 @@ router.post('/suggestions', requireAuth, async (req, res, next) => {
 
     const data = schema.parse(req.body);
 
+    const settingsRows = await prisma.setting.findMany({
+      where:  { organizationId: req.organizationId },
+      select: { key: true, value: true },
+    });
+    const settings = Object.fromEntries(settingsRows.map(r => [r.key, r.value]));
+
+    const learnFromApproved = settings['suggestion.learnFromApproved'] !== undefined
+      ? Boolean(settings['suggestion.learnFromApproved'])
+      : true;
+    const filterRejected = settings['suggestion.filterRejected'] !== undefined
+      ? Boolean(settings['suggestion.filterRejected'])
+      : true;
+
+    const model = typeof settings['suggestion.model'] === 'string'
+      ? settings['suggestion.model']
+      : undefined;
+
+    const temperature = settings['suggestion.temperature'] !== undefined
+      ? Number(settings['suggestion.temperature'])
+      : undefined;
+
+    const maxTokens = settings['suggestion.maxTokens'] !== undefined
+      ? Number(settings['suggestion.maxTokens'])
+      : undefined;
+
     // Buscar bases de conhecimento ativas da org
     const kbs = await prisma.knowledgeBase.findMany({
       where: { organizationId: req.organizationId, isActive: true },
     });
     const knowledgeBases = Object.fromEntries(kbs.map(kb => [kb.name, kb.content]));
 
-    const result = await generateSuggestions({ ...data, knowledgeBases });
+    const topExamples = learnFromApproved
+      ? (await prisma.template.findMany({
+          where: {
+            organizationId: req.organizationId,
+            isActive: true,
+            category: data.category,
+          },
+          select: { text: true },
+          orderBy: [{ score: 'desc' }, { usageCount: 'desc' }, { updatedAt: 'desc' }],
+          take: 3,
+        })).map(t => t.text).filter(Boolean)
+      : [];
+
+    const avoidPatterns = filterRejected
+      ? (await prisma.suggestionFeedback.findMany({
+          where: {
+            type: 'REJECTED',
+            suggestion: { organizationId: req.organizationId, category: data.category },
+          },
+          select: { suggestion: { select: { text: true } } },
+          orderBy: { createdAt: 'desc' },
+          take: 15,
+        }))
+          .map(r => r.suggestion?.text)
+          .filter(Boolean)
+          .map(t => String(t).trim().slice(0, 80))
+          .filter(Boolean)
+          .filter((v, i, arr) => arr.indexOf(v) === i)
+          .slice(0, 5)
+      : [];
+
+    const result = await generateSuggestions({
+      ...data,
+      topExamples,
+      avoidPatterns,
+      knowledgeBases,
+      model,
+      temperature,
+      maxTokens,
+    });
 
     // Atualizar quota
     if (result.tokensUsed) {
