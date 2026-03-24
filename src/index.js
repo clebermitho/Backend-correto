@@ -263,10 +263,6 @@ async function shutdown(signal) {
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT',  () => shutdown('SIGINT'));
 
-const { execSync } = require('child_process');
-
-// ... (resto dos imports)
-
 // ── Start ────────────────────────────────────────────────────
 async function start() {
   try {
@@ -275,20 +271,6 @@ async function start() {
     const mask = (url) => url.replace(/:([^@]+)@/, ':****@');
 
     logger.info({ event: 'startup.env_check', databaseUrl: mask(dbUrl), directUrl: mask(directUrl) });
-
-    // Tenta sincronizar o banco de dados via código para garantir que as colunas existam
-    if (directUrl) {
-      try {
-        logger.info({ event: 'startup.db_sync_start', info: 'Sincronizando esquema com DIRECT_URL...' });
-        execSync('npx prisma db push --accept-data-loss', {
-          env: { ...process.env, DATABASE_URL: directUrl },
-          stdio: 'inherit'
-        });
-        logger.info({ event: 'startup.db_sync_ok' });
-      } catch (syncErr) {
-        logger.error({ event: 'startup.db_sync_failed', err: syncErr.message });
-      }
-    }
 
     await prisma.$connect();
     logger.info({ event: 'startup.db_connected' });

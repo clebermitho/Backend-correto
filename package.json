@@ -1,6 +1,6 @@
 {
   "name": "chatplay-backend",
-  "version": "1.1.3",
+  "version": "1.1.4",
   "description": "Backend central do Chatplay Assistant \u2014 auth, eventos, m\u00e9tricas, proxy OpenAI",
   "main": "src/index.js",
   "scripts": {
@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@prisma/client": "^5.10.0",
+    "prisma": "^5.10.0",
     "bcryptjs": "^2.4.3",
     "compression": "^1.7.4",
     "cors": "^2.8.5",
@@ -34,8 +35,7 @@
     "zod": "^3.22.4"
   },
   "devDependencies": {
-    "nodemon": "^3.1.0",
-    "prisma": "^5.10.0"
+    "nodemon": "^3.1.0"
   },
   "engines": {
     "node": ">=20.0.0"

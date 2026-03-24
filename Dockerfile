@@ -28,4 +28,4 @@ COPY --from=builder /app/package.json ./
 EXPOSE 3001
 
 # Entrypoint: force schema sync using DIRECT_URL THEN start
-CMD ["dumb-init", "sh", "-c", "DATABASE_URL=$DIRECT_URL npx prisma db push --accept-data-loss && node src/index.js"]
+CMD ["dumb-init", "sh", "-c", "DATABASE_URL=$DIRECT_URL npx prisma db push --accept-data-loss --skip-generate && node src/index.js"]
