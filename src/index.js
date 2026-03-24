@@ -219,6 +219,7 @@ app.use('/api/ai',              require('./routes/ai'));
 app.use('/api/templates',       require('./routes/templates'));
 app.use('/api/users',           require('./routes/users'));
 app.use('/api/knowledge-bases', require('./routes/knowledgeBases'));
+app.use('/api/quota',           require('./routes/quota'));
 
 // ── Health check — verifica DB real ─────────────────────────
 app.get('/health', async (req, res) => {
@@ -299,6 +300,58 @@ async function start() {
       logger.warn({ event: 'cleanup.sessions_error', err: err.message });
     }
   }, 3600 * 1000);
+
+  const periodKeyUtc = () => {
+    const d = new Date();
+    const y = d.getUTCFullYear();
+    const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+    return `${y}-${m}`;
+  };
+
+  const resetQuotaIfPeriodChanged = async () => {
+    try {
+      const period = periodKeyUtc();
+      const orgs = await prisma.organization.findMany({
+        select: { id: true, usedTokens: true },
+      });
+      if (orgs.length === 0) return;
+
+      const settings = await prisma.setting.findMany({
+        where: { key: 'quota.period' },
+        select: { organizationId: true, value: true },
+      });
+      const prevByOrg = new Map(settings.map(s => [s.organizationId, String(s.value)]));
+
+      const tx = [];
+      for (const org of orgs) {
+        const prev = prevByOrg.get(org.id);
+        if (prev !== period) {
+          tx.push(
+            prisma.organization.update({
+              where: { id: org.id },
+              data: { usedTokens: 0 },
+            })
+          );
+          tx.push(
+            prisma.setting.upsert({
+              where: { organizationId_key: { organizationId: org.id, key: 'quota.period' } },
+              create: { organizationId: org.id, key: 'quota.period', value: period },
+              update: { value: period },
+            })
+          );
+        }
+      }
+      if (tx.length > 0) {
+        await prisma.$transaction(tx);
+        logger.info({ event: 'quota.reset', period, orgs: tx.length / 2 });
+      }
+    } catch (err) {
+      logger.warn({ event: 'quota.reset_error', err: err.message });
+    }
+  };
+
+  await resetQuotaIfPeriodChanged();
+  setInterval(resetQuotaIfPeriodChanged, 6 * 3600 * 1000);
 }
 
 start();
