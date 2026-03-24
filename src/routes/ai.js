@@ -71,6 +71,10 @@ router.post('/suggestions', requireAuth, async (req, res, next) => {
       ? Number(settings['suggestion.maxTokens'])
       : undefined;
 
+    const promptTemplate = typeof settings['prompt.suggestions'] === 'string'
+      ? settings['prompt.suggestions']
+      : '';
+
     // Buscar bases de conhecimento ativas da org
     const kbs = await prisma.knowledgeBase.findMany({
       where: { organizationId: req.organizationId, isActive: true },
@@ -113,6 +117,7 @@ router.post('/suggestions', requireAuth, async (req, res, next) => {
       topExamples,
       avoidPatterns,
       knowledgeBases,
+      promptTemplate,
       model,
       temperature,
       maxTokens,
@@ -174,6 +179,30 @@ router.post('/chat', requireAuth, async (req, res, next) => {
 
     const { message, history, context, knowledge, systemPrompt } = schema.parse(req.body);
 
+    const settingsRows = await prisma.setting.findMany({
+      where:  { organizationId: req.organizationId },
+      select: { key: true, value: true },
+    });
+    const settings = Object.fromEntries(settingsRows.map(r => [r.key, r.value]));
+
+    const model = typeof settings['suggestion.model'] === 'string'
+      ? settings['suggestion.model']
+      : undefined;
+
+    const temperature = settings['suggestion.temperature'] !== undefined
+      ? Number(settings['suggestion.temperature'])
+      : undefined;
+
+    const maxTokens = settings['suggestion.maxTokens'] !== undefined
+      ? Number(settings['suggestion.maxTokens'])
+      : undefined;
+
+    const systemPromptTemplate = typeof settings['prompt.chat'] === 'string' && settings['prompt.chat'].trim().length > 0
+      ? settings['prompt.chat']
+      : '';
+
+    const effectiveSystemPrompt = systemPromptTemplate ? '' : systemPrompt;
+
     // Buscar bases de conhecimento salvas no banco (complementam as enviadas pela extensão)
     const kbs = await prisma.knowledgeBase.findMany({
       where: { organizationId: req.organizationId, isActive: true },
@@ -185,8 +214,12 @@ router.post('/chat', requireAuth, async (req, res, next) => {
       history,
       context,
       knowledge,
-      systemPrompt,
+      systemPrompt: effectiveSystemPrompt,
+      systemPromptTemplate,
       dbKnowledgeBases,
+      model,
+      temperature,
+      maxTokens,
     });
 
     // Atualizar quota

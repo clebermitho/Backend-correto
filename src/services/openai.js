@@ -2,6 +2,14 @@ const logger = require('../utils/logger');
 
 const OPENAI_URL = 'https://api.openai.com/v1/chat/completions';
 
+function renderTemplate(template, vars) {
+  if (!template || typeof template !== 'string') return '';
+  return template.replace(/\{\{([A-Z0-9_]+)\}\}/g, (_, k) => {
+    const v = vars?.[k];
+    return v === undefined || v === null ? '' : String(v);
+  });
+}
+
 // ── Retry com backoff exponencial ───────────────────────────
 async function withRetry(fn, { retries = 3, baseDelayMs = 500, label = 'openai' } = {}) {
   let lastErr;
@@ -77,6 +85,7 @@ async function generateSuggestions({
   topExamples    = [],
   avoidPatterns  = [],
   knowledgeBases = {},
+  promptTemplate,
   model,
   temperature,
   maxTokens,
@@ -99,7 +108,7 @@ async function generateSuggestions({
   const baseCoren = baseCorenRaw ? JSON.stringify(baseCorenRaw, null, 2) : '(não carregada)';
   const baseChat  = baseSistRaw  ? JSON.stringify(baseSistRaw,  null, 2) : '(não carregada)';
 
-  const prompt = `Você é um assistente especializado do Coren (Conselho Regional de Enfermagem).
+  const defaultPrompt = `Você é um assistente especializado do Coren (Conselho Regional de Enfermagem).
 
 BASE COREN:
 ${baseCoren}
@@ -125,6 +134,18 @@ ${question}
 Gere exatamente 3 respostas profissionais e objetivas para esta situação.
 Separe cada resposta por uma linha em branco.
 NÃO use numeração nem prefixos como "Resposta 1:".`;
+
+  const prompt = (promptTemplate && promptTemplate.trim().length > 0)
+    ? renderTemplate(promptTemplate, {
+        BASE_COREN:     baseCoren,
+        BASE_SISTEMA:  baseChat,
+        AVOID_BLOCK:   avoidBlock.trim(),
+        EXAMPLES_BLOCK: examplesBlock.trim(),
+        CONTEXT:       context,
+        QUESTION:      question,
+        CATEGORY:      category,
+      }).trim()
+    : defaultPrompt;
 
   const start = Date.now();
 
@@ -202,24 +223,40 @@ async function generateChatReply({
   context          = '',
   knowledge        = {},
   systemPrompt     = '',
+  systemPromptTemplate = '',
   dbKnowledgeBases = {},
+  model,
+  temperature,
+  maxTokens,
 }) {
-  // Prioridade: systemPrompt enviado pela extensão (contém contexto completo).
-  // Fallback: prompt genérico com bases do banco.
-  let systemContent;
+  const kb = Object.fromEntries(
+    Object.entries(dbKnowledgeBases || {}).map(([k, v]) => [String(k).toLowerCase().trim(), v])
+  );
 
-  if (systemPrompt && systemPrompt.trim().length > 50) {
-    // Extensão enviou o prompt completo — usar diretamente
+  const baseCorenObj = knowledge?.coren ?? kb.coren ?? kb['base_coren'] ?? kb['base coren'];
+  const baseSistObj  = knowledge?.sistema ?? kb.sistema ?? kb.chat ?? kb['base_sistema'] ?? kb['base sistema'];
+
+  const baseCoren = baseCorenObj ? JSON.stringify(baseCorenObj, null, 2) : '(não carregada)';
+  const baseSist  = baseSistObj  ? JSON.stringify(baseSistObj,  null, 2) : '(não carregada)';
+
+  const historyText = history
+    .slice(-10)
+    .map(m => `${m.role}: ${m.content}`)
+    .join('\n');
+
+  let systemContent = '';
+
+  if (systemPromptTemplate && systemPromptTemplate.trim().length > 0) {
+    systemContent = renderTemplate(systemPromptTemplate, {
+      BASE_COREN:    baseCoren,
+      BASE_SISTEMA: baseSist,
+      CONTEXT:      context,
+      MESSAGE:      message,
+      HISTORY:      historyText,
+    }).trim();
+  } else if (systemPrompt && systemPrompt.trim().length > 50) {
     systemContent = systemPrompt;
   } else {
-    // Fallback: montar prompt com bases do banco
-    const baseCoren  = knowledge?.coren   ? JSON.stringify(knowledge.coren,   null, 2)
-                       : dbKnowledgeBases?.coren   ? JSON.stringify(dbKnowledgeBases.coren,   null, 2)
-                       : '(não carregada)';
-    const baseSist   = knowledge?.sistema ? JSON.stringify(knowledge.sistema, null, 2)
-                       : dbKnowledgeBases?.sistema ? JSON.stringify(dbKnowledgeBases.sistema, null, 2)
-                       : '(não carregada)';
-
     systemContent = `Você é um assistente inteligente do Coren que ajuda operadores humanos.
 
 BASE COREN:
@@ -243,7 +280,12 @@ IMPORTANTE: Responda de forma natural, clara e útil. Use emojis quando apropria
   ];
 
   const start = Date.now();
-  const data  = await callOpenAI({ messages, temperature: 0.8, max_tokens: 600 });
+  const data  = await callOpenAI({
+    messages,
+    model:       model || undefined,
+    temperature: temperature ?? 0.8,
+    max_tokens:  maxTokens ?? 600,
+  });
   const latencyMs = Date.now() - start;
 
   logger.info({
