@@ -266,6 +266,11 @@ process.on('SIGINT',  () => shutdown('SIGINT'));
 // ── Start ────────────────────────────────────────────────────
 async function start() {
   try {
+    // Log de depuração (sem expor a senha) para validar a conexão no Render
+    const dbUrl = process.env.DATABASE_URL || '';
+    const maskedUrl = dbUrl.replace(/:([^@]+)@/, ':****@');
+    logger.info({ event: 'startup.db_connecting', info: `Tentando conectar em: ${maskedUrl}` });
+
     await prisma.$connect();
     logger.info({ event: 'startup.db_connected' });
   } catch (err) {
