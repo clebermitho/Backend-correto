@@ -45,10 +45,12 @@ model User {
   passwordHash   String
   name           String
   role           UserRole @default(AGENT)   // AGENT | ADMIN | SUPER_ADMIN
-  isActive       Boolean  @default(true)
-  lastSeenAt     DateTime?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  isActive              Boolean  @default(true)
+  lastSeenAt            DateTime?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  dailyChatLimit        Int?     // null = usar limite global da org; 0 = ilimitado
+  dailySuggestionLimit  Int?     // null = usar limite global da org; 0 = ilimitado
 
   organization      Organization       @relation(fields: [organizationId], references: [id])
   sessions          Session[]
