@@ -6,6 +6,14 @@ const { prisma }                 = require('../utils/prisma');
 const { log }                    = require('../utils/audit');
 const logger                     = require('../utils/logger');
 
+function normalizeModel(value) {
+  if (typeof value !== 'string') return undefined;
+  const s = value.trim().replace(/^["']|["']$/g, '').trim();
+  if (!s) return undefined;
+  if (!/^[a-z0-9][a-z0-9._:-]{0,63}$/i.test(s)) return undefined;
+  return s;
+}
+
 // ── Auxiliar: Verificar e descontar quota ────────────────────
 async function checkQuota(orgId) {
   const org = await prisma.organization.findUnique({
@@ -59,9 +67,11 @@ router.post('/suggestions', requireAuth, async (req, res, next) => {
       ? Boolean(settings['suggestion.filterRejected'])
       : true;
 
-    const model = typeof settings['suggestion.model'] === 'string'
-      ? settings['suggestion.model']
-      : undefined;
+    const rawModel = settings['suggestion.model'];
+    const model = normalizeModel(rawModel);
+    if (typeof rawModel === 'string' && !model) {
+      logger.warn({ event: 'ai.invalid_model_setting', orgId: req.organizationId, rawModel: rawModel.slice(0, 80) });
+    }
 
     const temperature = settings['suggestion.temperature'] !== undefined
       ? Number(settings['suggestion.temperature'])
@@ -188,9 +198,11 @@ router.post('/chat', requireAuth, async (req, res, next) => {
     });
     const settings = Object.fromEntries(settingsRows.map(r => [r.key, r.value]));
 
-    const model = typeof settings['suggestion.model'] === 'string'
-      ? settings['suggestion.model']
-      : undefined;
+    const rawModel = settings['suggestion.model'];
+    const model = normalizeModel(rawModel);
+    if (typeof rawModel === 'string' && !model) {
+      logger.warn({ event: 'ai.invalid_model_setting', orgId: req.organizationId, rawModel: rawModel.slice(0, 80) });
+    }
 
     const temperature = settings['suggestion.temperature'] !== undefined
       ? Number(settings['suggestion.temperature'])
