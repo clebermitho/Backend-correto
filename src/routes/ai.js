@@ -14,6 +14,54 @@ function normalizeModel(value) {
   return s;
 }
 
+// ── Auxiliar: Verificar limite diário do usuário ─────────────
+async function checkDailyLimit(userId, organizationId, type) {
+  // type: 'chat' | 'suggestions'
+  const eventType = type === 'chat' ? 'ai.chat_message' : 'ai.suggestions_generated';
+  const limitField = type === 'chat' ? 'dailyChatLimit' : 'dailySuggestionLimit';
+  const settingKey = type === 'chat' ? 'limits.chatMessagesPerUserPerDay' : 'limits.suggestionsPerUserPerDay';
+
+  // Buscar limite individual do usuário
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { [limitField]: true },
+  });
+
+  let limit = user?.[limitField]; // null = usar global; 0 = ilimitado; N = limite
+
+  // Se null, buscar limite global da org via Settings
+  if (limit === null || limit === undefined) {
+    const setting = await prisma.setting.findUnique({
+      where: { organizationId_key: { organizationId, key: settingKey } },
+      select: { value: true },
+    });
+    const globalVal = setting?.value;
+    limit = (globalVal !== undefined && globalVal !== null) ? Number(globalVal) : null;
+  }
+
+  // 0 ou null (sem configuração) = ilimitado
+  if (!limit) return;
+
+  // Contar eventos de hoje
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
+
+  const count = await prisma.usageEvent.count({
+    where: {
+      userId,
+      eventType,
+      createdAt: { gte: startOfDay },
+    },
+  });
+
+  if (count >= limit) {
+    const label = type === 'chat' ? 'mensagens de chat' : 'solicitações de sugestões';
+    const err = new Error(`Limite diário de ${label} atingido (${count}/${limit}). Tente novamente amanhã.`);
+    err.statusCode = 429;
+    throw err;
+  }
+}
+
 // ── Auxiliar: Verificar e descontar quota ────────────────────
 async function checkQuota(orgId) {
   const org = await prisma.organization.findUnique({
@@ -43,6 +91,7 @@ async function updateQuota(orgId, tokens) {
 router.post('/suggestions', requireAuth, async (req, res, next) => {
   try {
     await checkQuota(req.organizationId);
+    await checkDailyLimit(req.user.id, req.organizationId, 'suggestions');
     
     const schema = z.object({
       context:       z.string().min(1),
@@ -171,10 +220,11 @@ router.post('/suggestions', requireAuth, async (req, res, next) => {
   }
 });
 
-// POST /api/ai/chat — chat livre com a IA (contexto + bases + system prompt)
+// POST /api/ai/chat — chat livre com a IA (bases + system prompt)
 router.post('/chat', requireAuth, async (req, res, next) => {
   try {
     await checkQuota(req.organizationId);
+    await checkDailyLimit(req.user.id, req.organizationId, 'chat');
 
     const schema = z.object({
       message:      z.string().min(1),
@@ -182,7 +232,6 @@ router.post('/chat', requireAuth, async (req, res, next) => {
         role: z.enum(['user', 'assistant']),
         content: z.string(),
       })).default([]),
-      context:      z.string().default(''),
       knowledge:    z.object({
         coren:   z.any().optional(),
         sistema: z.any().optional(),
@@ -190,7 +239,7 @@ router.post('/chat', requireAuth, async (req, res, next) => {
       systemPrompt: z.string().default(''),
     });
 
-    const { message, history, context } = schema.parse(req.body);
+    const { message, history } = schema.parse(req.body);
 
     const settingsRows = await prisma.setting.findMany({
       where:  { organizationId: req.organizationId },
@@ -225,7 +274,6 @@ router.post('/chat', requireAuth, async (req, res, next) => {
     const result = await generateChatReply({
       message,
       history,
-      context,
       systemPromptTemplate,
       dbKnowledgeBases,
       model,

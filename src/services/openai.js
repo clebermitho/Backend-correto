@@ -229,7 +229,6 @@ async function generateEmbedding(text) {
 async function generateChatReply({
   message,
   history          = [],
-  context          = '',
   systemPromptTemplate = '',
   dbKnowledgeBases = {},
   model,
@@ -265,7 +264,6 @@ async function generateChatReply({
     systemContent = renderTemplate(systemPromptTemplate, {
       BASE_COREN:    baseCoren,
       BASE_SISTEMA: baseSist,
-      CONTEXT:      clipText(context, 12_000),
       MESSAGE:      message,
       HISTORY:      clipText(historyText, 6_000),
     }).trim();
@@ -281,15 +279,10 @@ ${baseSist}
 IMPORTANTE: Responda de forma natural, clara e útil. Use emojis quando apropriado.`;
   }
 
-  // Montar mensagem do usuário com contexto do chat (se existir)
-  const userContent = context && context.trim().length > 0
-    ? `CONTEXTO DO CHAT:\n${clipText(context, 12_000)}\n\nPERGUNTA DO OPERADOR:\n${message}`
-    : message;
-
   const messages = [
     { role: 'system', content: systemContent },
     ...safeHistory.slice(-6),    // últimas 6 trocas para continuidade da conversa
-    { role: 'user',   content: userContent },
+    { role: 'user',   content: message },
   ];
 
   const start = Date.now();
@@ -302,13 +295,12 @@ IMPORTANTE: Responda de forma natural, clara e útil. Use emojis quando apropria
   const latencyMs = Date.now() - start;
 
   logger.info({
-    event:    'openai.chat_ok',
+    event:             'openai.chat_ok',
     latencyMs,
-    tokens:   data.usage?.total_tokens,
-    model:    data.model,
-    hasCtx:   context.length > 0,
-    hasKnow:  !!(baseCorenObj || baseSistObj),
-    hasSysP:  systemPromptTemplate.trim().length > 0,
+    tokens:            data.usage?.total_tokens,
+    model:             data.model,
+    hasKnowledgeBase:  !!(baseCorenObj || baseSistObj),
+    hasSystemPrompt:   systemPromptTemplate.trim().length > 0,
   });
 
   return {
