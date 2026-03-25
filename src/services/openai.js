@@ -10,6 +10,13 @@ function renderTemplate(template, vars) {
   });
 }
 
+function clipText(value, maxChars) {
+  if (!value) return '';
+  const s = String(value);
+  if (s.length <= maxChars) return s;
+  return `${s.slice(0, maxChars)}\n\n[...truncado...]`;
+}
+
 // ── Retry com backoff exponencial ───────────────────────────
 async function withRetry(fn, { retries = 3, baseDelayMs = 500, label = 'openai' } = {}) {
   let lastErr;
@@ -67,7 +74,9 @@ async function callOpenAI({
       if (!response.ok) {
         const err = await response.json().catch(() => ({}));
         const msg = err?.error?.message || `OpenAI HTTP ${response.status}`;
-        throw new Error(msg);
+        const e = new Error(msg);
+        e.statusCode = 502;
+        throw e;
       }
 
       return response.json();
@@ -105,8 +114,8 @@ async function generateSuggestions({
   const baseCorenRaw = kb.coren ?? kb['base_coren'] ?? kb['base coren'];
   const baseSistRaw  = kb.chat ?? kb.sistema ?? kb['base_sistema'] ?? kb['base sistema'];
 
-  const baseCoren = baseCorenRaw ? JSON.stringify(baseCorenRaw, null, 2) : '(não carregada)';
-  const baseChat  = baseSistRaw  ? JSON.stringify(baseSistRaw,  null, 2) : '(não carregada)';
+  const baseCoren = baseCorenRaw ? clipText(JSON.stringify(baseCorenRaw, null, 2), 12_000) : '(não carregada)';
+  const baseChat  = baseSistRaw  ? clipText(JSON.stringify(baseSistRaw,  null, 2), 12_000) : '(não carregada)';
 
   const defaultPrompt = `Você é um assistente especializado do Coren (Conselho Regional de Enfermagem).
 
@@ -141,7 +150,7 @@ NÃO use numeração nem prefixos como "Resposta 1:".`;
         BASE_SISTEMA:  baseChat,
         AVOID_BLOCK:   avoidBlock.trim(),
         EXAMPLES_BLOCK: examplesBlock.trim(),
-        CONTEXT:       context,
+        CONTEXT:       clipText(context, 12_000),
         QUESTION:      question,
         CATEGORY:      category,
       }).trim()
@@ -234,10 +243,18 @@ async function generateChatReply({
   const baseCorenObj = kb.coren ?? kb['base_coren'] ?? kb['base coren'];
   const baseSistObj  = kb.sistema ?? kb.chat ?? kb['base_sistema'] ?? kb['base sistema'];
 
-  const baseCoren = baseCorenObj ? JSON.stringify(baseCorenObj, null, 2) : '(não carregada)';
-  const baseSist  = baseSistObj  ? JSON.stringify(baseSistObj,  null, 2) : '(não carregada)';
+  const baseCoren = baseCorenObj ? clipText(JSON.stringify(baseCorenObj, null, 2), 12_000) : '(não carregada)';
+  const baseSist  = baseSistObj  ? clipText(JSON.stringify(baseSistObj,  null, 2), 12_000) : '(não carregada)';
 
-  const historyText = history
+  const safeHistory = (Array.isArray(history) ? history : [])
+    .map(m => ({
+      role: m?.role === 'user' ? 'user' : 'assistant',
+      content: String(m?.content || ''),
+    }))
+    .filter(m => m.content.trim() !== '')
+    .slice(-10);
+
+  const historyText = safeHistory
     .slice(-10)
     .map(m => `${m.role}: ${m.content}`)
     .join('\n');
@@ -248,9 +265,9 @@ async function generateChatReply({
     systemContent = renderTemplate(systemPromptTemplate, {
       BASE_COREN:    baseCoren,
       BASE_SISTEMA: baseSist,
-      CONTEXT:      context,
+      CONTEXT:      clipText(context, 12_000),
       MESSAGE:      message,
-      HISTORY:      historyText,
+      HISTORY:      clipText(historyText, 6_000),
     }).trim();
   } else {
     systemContent = `Você é um assistente inteligente do Coren que ajuda operadores humanos.
@@ -266,12 +283,12 @@ IMPORTANTE: Responda de forma natural, clara e útil. Use emojis quando apropria
 
   // Montar mensagem do usuário com contexto do chat (se existir)
   const userContent = context && context.trim().length > 0
-    ? `CONTEXTO DO CHAT:\n${context}\n\nPERGUNTA DO OPERADOR:\n${message}`
+    ? `CONTEXTO DO CHAT:\n${clipText(context, 12_000)}\n\nPERGUNTA DO OPERADOR:\n${message}`
     : message;
 
   const messages = [
     { role: 'system', content: systemContent },
-    ...history.slice(-6),    // últimas 6 trocas para continuidade da conversa
+    ...safeHistory.slice(-6),    // últimas 6 trocas para continuidade da conversa
     { role: 'user',   content: userContent },
   ];
 

@@ -168,7 +168,10 @@ router.post('/chat', requireAuth, async (req, res, next) => {
 
     const schema = z.object({
       message:      z.string().min(1),
-      history:      z.array(z.object({ role: z.string(), content: z.string() })).default([]),
+      history:      z.array(z.object({
+        role: z.enum(['user', 'assistant']),
+        content: z.string(),
+      })).default([]),
       context:      z.string().default(''),
       knowledge:    z.object({
         coren:   z.any().optional(),
