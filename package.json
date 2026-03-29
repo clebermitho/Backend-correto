@@ -1,6 +1,6 @@
 {
   "name": "chatplay-backend",
-  "version": "1.1.4",
+  "version": "1.2.0",
   "description": "Backend central do Chatplay Assistant \u2014 auth, eventos, m\u00e9tricas, proxy OpenAI",
   "main": "src/index.js",
   "scripts": {
