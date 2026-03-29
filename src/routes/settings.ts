@@ -3,18 +3,25 @@ import { z } from 'zod';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../utils/prisma';
 import { requireAuth, requireRole } from '../middleware/auth';
+import { cache } from '../utils/cache';
 
 const router = Router();
 
 // GET /api/settings — todas as configurações da org
 router.get('/', requireAuth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
+    const orgId    = req.organizationId!;
+    const cacheKey = `settings:${orgId}`;
+    const cached   = cache.get<Record<string, unknown>>(cacheKey);
+    if (cached) { res.json({ settings: cached }); return; }
+
     const rows = await prisma.setting.findMany({
-      where: { organizationId: req.organizationId! },
+      where:  { organizationId: orgId },
       select: { key: true, value: true },
     });
 
     const settings = Object.fromEntries(rows.map(r => [r.key, r.value]));
+    cache.set(cacheKey, settings);
     res.json({ settings });
   } catch (err) { next(err); }
 });
@@ -52,6 +59,7 @@ router.put('/bulk', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (req
     });
     const saved = Object.fromEntries(rows.map(r => [r.key, r.value]));
 
+    cache.del(`settings:${req.organizationId!}`);
     res.json({ saved: entries.length, settings: saved });
   } catch (err) { next(err); }
 });
@@ -68,6 +76,7 @@ router.put('/:key', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (req
       update: { value: value as Prisma.InputJsonValue },
     });
 
+    cache.del(`settings:${req.organizationId!}`);
     res.json(setting);
   } catch (err) { next(err); }
 });
@@ -78,6 +87,7 @@ router.delete('/:key', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (
     await prisma.setting.delete({
       where: { organizationId_key: { organizationId: req.organizationId!, key: req.params.key } },
     });
+    cache.del(`settings:${req.organizationId!}`);
     res.json({ ok: true });
   } catch (err) { next(err); }
 });
