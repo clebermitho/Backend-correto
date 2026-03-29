@@ -27,3 +27,8 @@ Thumbs.db
 
 # Test coverage
 coverage/
+
+# TypeScript build artifacts
+*.js.map
+*.d.ts
+!jest.config.js

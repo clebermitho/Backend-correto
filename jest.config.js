@@ -1,10 +1,13 @@
 module.exports = {
   testEnvironment: 'node',
   testMatch: ['**/tests/**/*.test.js', '**/__tests__/**/*.test.js'],
+  transform: {
+    '^.+\\.[jt]sx?$': 'babel-jest',
+  },
   collectCoverageFrom: [
-    'src/**/*.js',
-    '!src/index.js',
-    '!src/utils/logger.js',
+    'src/**/*.ts',
+    '!src/index.ts',
+    '!src/utils/logger.ts',
   ],
   coverageDirectory: 'coverage',
   coverageReporters: ['text', 'lcov', 'clover'],

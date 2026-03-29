@@ -1,11 +1,11 @@
 {
   "name": "chatplay-backend",
   "version": "1.1.4",
-  "description": "Backend central do Chatplay Assistant \u2014 auth, eventos, m\u00e9tricas, proxy OpenAI",
-  "main": "src/index.js",
+  "description": "Backend central do Chatplay Assistant — auth, eventos, métricas, proxy OpenAI",
+  "main": "dist/index.js",
   "scripts": {
-    "dev": "nodemon src/index.js",
-    "start": "node src/index.js",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
     "setup": "bash scripts/setup.sh",
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
@@ -17,11 +17,11 @@
     "postinstall": "prisma generate",
     "test": "jest --forceExit --detectOpenHandles",
     "test:watch": "jest --watch --forceExit --detectOpenHandles",
-    "test:coverage": "jest --coverage --forceExit --detectOpenHandles"
+    "test:coverage": "jest --coverage --forceExit --detectOpenHandles",
+    "build": "tsc"
   },
   "dependencies": {
     "@prisma/client": "^5.10.0",
-    "prisma": "^5.10.0",
     "bcryptjs": "^2.4.3",
     "compression": "^1.7.4",
     "cors": "^2.8.5",
@@ -32,16 +32,34 @@
     "jsonwebtoken": "^9.0.2",
     "luxon": "^3.4.4",
     "node-fetch": "^3.3.2",
+    "prisma": "^5.10.0",
     "swagger-jsdoc": "^6.2.8",
     "swagger-ui-express": "^5.0.0",
     "winston": "^3.11.0",
     "zod": "^3.22.4"
   },
   "devDependencies": {
+    "@babel/core": "^7.29.0",
+    "@babel/preset-env": "^7.29.2",
+    "@babel/preset-typescript": "^7.28.5",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/compression": "^1.7.5",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
     "@types/jest": "^29.5.12",
+    "@types/jsonwebtoken": "^9.0.6",
+    "@types/luxon": "^3.7.1",
+    "@types/node": "^20.14.0",
+    "@types/swagger-jsdoc": "^6.0.4",
+    "@types/swagger-ui-express": "^4.1.6",
+    "babel-jest": "^30.3.0",
+    "babel-plugin-add-module-exports": "^1.0.4",
     "jest": "^29.7.0",
     "nodemon": "^3.1.0",
-    "supertest": "^6.3.4"
+    "supertest": "^6.3.4",
+    "ts-node": "^10.9.2",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0"
   },
   "engines": {
     "node": ">=20.0.0"

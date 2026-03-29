@@ -1,11 +1,12 @@
-const router  = require('express').Router();
-const bcrypt  = require('bcryptjs');
-const { z }   = require('zod');
-const { prisma }      = require('../utils/prisma');
-const { requireAuth } = require('../middleware/auth');
-const { requireRole } = require('../middleware/auth');
-const { log }         = require('../utils/audit');
-const logger          = require('../utils/logger');
+import { Router, Request, Response, NextFunction } from 'express';
+import bcrypt from 'bcryptjs';
+import { z } from 'zod';
+import { prisma } from '../utils/prisma';
+import { requireAuth, requireRole } from '../middleware/auth';
+import { log } from '../utils/audit';
+import logger from '../utils/logger';
+
+const router = Router();
 
 const USER_SELECT = {
   id: true, name: true, email: true, role: true,
@@ -14,7 +15,7 @@ const USER_SELECT = {
 };
 
 // ── Auxiliar: verificar se usuário tem sessão ativa ──────────
-async function isUserOnline(userId) {
+async function isUserOnline(userId: string): Promise<boolean> {
   const now = new Date();
   const active = await prisma.session.findFirst({
     where: { userId, isRevoked: false, expiresAt: { gt: now } },
@@ -24,7 +25,10 @@ async function isUserOnline(userId) {
 }
 
 // ── Auxiliar: obter limite efetivo do usuário ────────────────
-async function getEffectiveLimits(user, organizationId) {
+async function getEffectiveLimits(
+  user: { dailyChatLimit?: number | null; dailySuggestionLimit?: number | null },
+  organizationId: string
+): Promise<{ effectiveChatLimit: number | null; effectiveSuggestionLimit: number | null }> {
   const settingsRows = await prisma.setting.findMany({
     where: { organizationId, key: { in: ['limits.chatMessagesPerUserPerDay', 'limits.suggestionsPerUserPerDay'] } },
     select: { key: true, value: true },
@@ -45,10 +49,10 @@ async function getEffectiveLimits(user, organizationId) {
 }
 
 // ── GET /api/users ───────────────────────────────────────────
-router.get('/', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (req, res, next) => {
+router.get('/', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const users = await prisma.user.findMany({
-      where:   { organizationId: req.organizationId },
+      where:   { organizationId: req.organizationId! },
       select:  USER_SELECT,
       orderBy: { createdAt: 'desc' },
     });
@@ -68,13 +72,13 @@ router.get('/', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (req, re
 });
 
 // ── GET /api/users/:id — detalhes e estatísticas do usuário ──
-router.get('/:id', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (req, res, next) => {
+router.get('/:id', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const user = await prisma.user.findFirst({
-      where:  { id: req.params.id, organizationId: req.organizationId },
+      where:  { id: req.params.id, organizationId: req.organizationId! },
       select: USER_SELECT,
     });
-    if (!user) return res.status(404).json({ error: 'Usuário não encontrado.' });
+    if (!user) { res.status(404).json({ error: 'Usuário não encontrado.' }); return; }
 
     const startOfDay = new Date();
     startOfDay.setHours(0, 0, 0, 0);
@@ -97,7 +101,7 @@ router.get('/:id', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (req,
       isUserOnline(user.id),
     ]);
 
-    const { effectiveChatLimit, effectiveSuggestionLimit } = await getEffectiveLimits(user, req.organizationId);
+    const { effectiveChatLimit, effectiveSuggestionLimit } = await getEffectiveLimits(user, req.organizationId!);
 
     res.json({
       user: {
@@ -119,7 +123,7 @@ router.get('/:id', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (req,
 });
 
 // ── POST /api/users — criar agente ───────────────────────────
-router.post('/', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (req, res, next) => {
+router.post('/', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const data = z.object({
       name:     z.string().min(2, 'Nome muito curto.'),
@@ -129,12 +133,12 @@ router.post('/', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (req, r
     }).parse(req.body);
 
     const exists = await prisma.user.findUnique({ where: { email: data.email.toLowerCase().trim() } });
-    if (exists) return res.status(409).json({ error: 'E-mail já registrado.' });
+    if (exists) { res.status(409).json({ error: 'E-mail já registrado.' }); return; }
 
     const hash = await bcrypt.hash(data.password, 12);
     const user = await prisma.user.create({
       data: {
-        organizationId: req.organizationId,
+        organizationId: req.organizationId!,
         email:          data.email.toLowerCase().trim(),
         passwordHash:   hash,
         name:           data.name,
@@ -143,38 +147,38 @@ router.post('/', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (req, r
       select: USER_SELECT,
     });
 
-    log({ organizationId: req.organizationId, userId: req.user.id,
+    log({ organizationId: req.organizationId!, userId: req.user!.id,
           eventType: 'user.created', payload: { newUserId: user.id, email: user.email, role: user.role } });
-    logger.info({ event: 'user.created', by: req.user.id, newUser: user.id });
+    logger.info({ event: 'user.created', by: req.user!.id, newUser: user.id });
 
     res.status(201).json({ user });
   } catch (err) { next(err); }
 });
 
 // ── PATCH /api/users/:id — ativar/desativar / trocar role ────
-router.patch('/:id', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (req, res, next) => {
+router.patch('/:id', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const updates = z.object({
-      isActive:            z.boolean().optional(),
-      role:                z.enum(['AGENT', 'ADMIN']).optional(),
-      name:                z.string().min(2).optional(),
-      dailyChatLimit:      z.number().int().min(0).nullable().optional(),
+      isActive:             z.boolean().optional(),
+      role:                 z.enum(['AGENT', 'ADMIN']).optional(),
+      name:                 z.string().min(2).optional(),
+      dailyChatLimit:       z.number().int().min(0).nullable().optional(),
       dailySuggestionLimit: z.number().int().min(0).nullable().optional(),
     }).parse(req.body);
 
     if (Object.keys(updates).length === 0) {
-      return res.status(400).json({ error: 'Nenhum campo para atualizar.' });
+      res.status(400).json({ error: 'Nenhum campo para atualizar.' });
+      return;
     }
 
-    // Garante que o usuário pertence à org
     const existing = await prisma.user.findFirst({
-      where: { id: req.params.id, organizationId: req.organizationId },
+      where: { id: req.params.id, organizationId: req.organizationId! },
     });
-    if (!existing) return res.status(404).json({ error: 'Usuário não encontrado.' });
+    if (!existing) { res.status(404).json({ error: 'Usuário não encontrado.' }); return; }
 
-    // Admin não pode revogar a si mesmo
-    if (req.params.id === req.user.id && updates.isActive === false) {
-      return res.status(400).json({ error: 'Não é possível desativar sua própria conta.' });
+    if (req.params.id === req.user!.id && updates.isActive === false) {
+      res.status(400).json({ error: 'Não é possível desativar sua própria conta.' });
+      return;
     }
 
     const user = await prisma.user.update({
@@ -183,7 +187,7 @@ router.patch('/:id', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (re
       select: USER_SELECT,
     });
 
-    log({ organizationId: req.organizationId, userId: req.user.id,
+    log({ organizationId: req.organizationId!, userId: req.user!.id,
           eventType: 'user.updated', payload: { targetId: user.id, updates } });
 
     res.json({ user });
@@ -191,28 +195,27 @@ router.patch('/:id', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (re
 });
 
 // ── POST /api/users/:id/reset-password — admin reseta senha ──
-router.post('/:id/reset-password', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (req, res, next) => {
+router.post('/:id/reset-password', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const { newPassword } = z.object({
       newPassword: z.string().min(8, 'Mínimo 8 caracteres.'),
     }).parse(req.body);
 
     const existing = await prisma.user.findFirst({
-      where: { id: req.params.id, organizationId: req.organizationId },
+      where: { id: req.params.id, organizationId: req.organizationId! },
     });
-    if (!existing) return res.status(404).json({ error: 'Usuário não encontrado.' });
+    if (!existing) { res.status(404).json({ error: 'Usuário não encontrado.' }); return; }
 
     const hash = await bcrypt.hash(newPassword, 12);
     await prisma.user.update({ where: { id: req.params.id }, data: { passwordHash: hash } });
 
-    // Revogar todas as sessões do usuário para forçar novo login
     await prisma.session.deleteMany({ where: { userId: req.params.id } });
 
-    log({ organizationId: req.organizationId, userId: req.user.id,
+    log({ organizationId: req.organizationId!, userId: req.user!.id,
           eventType: 'user.password_reset', payload: { targetId: req.params.id } });
 
     res.json({ ok: true, message: 'Senha alterada. Sessões anteriores revogadas.' });
   } catch (err) { next(err); }
 });
 
-module.exports = router;
+export default router;

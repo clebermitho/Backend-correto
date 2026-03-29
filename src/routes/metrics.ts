@@ -1,15 +1,16 @@
-const router = require('express').Router();
-const { prisma }       = require('../utils/prisma');
-const { requireAuth }  = require('../middleware/auth');
-const { requireRole }  = require('../middleware/auth');
+import { Router, Request, Response, NextFunction } from 'express';
+import { prisma } from '../utils/prisma';
+import { requireAuth, requireRole } from '../middleware/auth';
+
+const router = Router();
 
 // GET /api/metrics/summary — visão geral para o admin
-router.get('/summary', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (req, res, next) => {
+router.get('/summary', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const orgId = req.organizationId;
+    const orgId = req.organizationId!;
     const since = req.query.since
-      ? new Date(req.query.since)
-      : new Date(Date.now() - 30 * 24 * 3600 * 1000); // últimos 30 dias
+      ? new Date(req.query.since as string)
+      : new Date(Date.now() - 30 * 24 * 3600 * 1000);
 
     const [
       totalUsers,
@@ -37,7 +38,6 @@ router.get('/summary', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (
         where: { user: { organizationId: orgId }, createdAt: { gte: since } },
       }),
 
-      // USED também conta como aprovação (operador clicou e usou)
       prisma.suggestionFeedback.count({
         where: {
           user: { organizationId: orgId },
@@ -74,17 +74,14 @@ router.get('/summary', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (
         take: 5,
       }),
 
-      // Templates total ativos
       prisma.template.count({
         where: { organizationId: orgId, isActive: true },
       }),
 
-      // Templates "aprendidos" = originados de IA com score alto (source AI e score >= 0.5)
       prisma.template.count({
         where: { organizationId: orgId, isActive: true, score: { gte: 0.5 } },
       }),
 
-      // Latência média das sugestões (payload.latencyMs dos eventos)
       prisma.usageEvent.findMany({
         where: {
           organizationId: orgId,
@@ -97,10 +94,9 @@ router.get('/summary', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (
       }),
     ]);
 
-    // Calcular latência média a partir dos eventos
     const latencies = avgLatencyRaw
-      .map(e => e.payload?.latencyMs)
-      .filter(v => typeof v === 'number' && v > 0);
+      .map(e => (e.payload as Record<string, unknown>)?.latencyMs)
+      .filter((v): v is number => typeof v === 'number' && v > 0);
     const avgLatencyMs = latencies.length > 0
       ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length)
       : null;
@@ -133,19 +129,18 @@ router.get('/summary', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (
 });
 
 // GET /api/metrics/activity?days=7 — série temporal de eventos
-router.get('/activity', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (req, res, next) => {
+router.get('/activity', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const days  = Math.min(parseInt(req.query.days) || 7, 90);
+    const days  = Math.min(parseInt(req.query.days as string) || 7, 90);
     const since = new Date(Date.now() - days * 24 * 3600 * 1000);
 
     const events = await prisma.usageEvent.findMany({
-      where: { organizationId: req.organizationId, createdAt: { gte: since } },
+      where: { organizationId: req.organizationId!, createdAt: { gte: since } },
       select: { eventType: true, createdAt: true },
       orderBy: { createdAt: 'asc' },
     });
 
-    // Agregar por dia
-    const byDay = {};
+    const byDay: Record<string, Record<string, number>> = {};
     events.forEach(e => {
       const day = e.createdAt.toISOString().slice(0, 10);
       if (!byDay[day]) byDay[day] = {};
@@ -156,4 +151,4 @@ router.get('/activity', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async 
   } catch (err) { next(err); }
 });
 
-module.exports = router;
+export default router;

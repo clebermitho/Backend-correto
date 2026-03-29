@@ -1,25 +1,27 @@
-const router = require('express').Router();
-const { z } = require('zod');
-const { prisma } = require('../utils/prisma');
-const { requireAuth, requireRole } = require('../middleware/auth');
+import { Router, Request, Response, NextFunction } from 'express';
+import { z } from 'zod';
+import { prisma } from '../utils/prisma';
+import { requireAuth, requireRole } from '../middleware/auth';
 
-function periodKeyUtc(d = new Date()) {
+const router = Router();
+
+function periodKeyUtc(d: Date = new Date()): string {
   const y = d.getUTCFullYear();
   const m = String(d.getUTCMonth() + 1).padStart(2, '0');
   return `${y}-${m}`;
 }
 
-router.get('/', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (req, res, next) => {
+router.get('/', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const org = await prisma.organization.findUnique({
-      where: { id: req.organizationId },
+      where: { id: req.organizationId! },
       select: { id: true, name: true, monthlyQuota: true, usedTokens: true },
     });
-    if (!org) return res.status(404).json({ error: 'Organização não encontrada.' });
+    if (!org) { res.status(404).json({ error: 'Organização não encontrada.' }); return; }
 
     const monthlyQuota = org.monthlyQuota ?? 0;
-    const usedTokens = org.usedTokens ?? 0;
-    const remaining = Math.max(0, monthlyQuota - usedTokens);
+    const usedTokens   = org.usedTokens   ?? 0;
+    const remaining    = Math.max(0, monthlyQuota - usedTokens);
 
     res.json({
       period: periodKeyUtc(),
@@ -31,30 +33,31 @@ router.get('/', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (req, re
   } catch (err) { next(err); }
 });
 
-router.put('/', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (req, res, next) => {
+router.put('/', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const body = z.object({
-      monthlyQuota: z.number().int().min(0).max(100_000_000).optional(),
+      monthlyQuota:    z.number().int().min(0).max(100_000_000).optional(),
       resetUsedTokens: z.boolean().optional(),
     }).parse(req.body);
 
     if (body.monthlyQuota === undefined && !body.resetUsedTokens) {
-      return res.status(400).json({ error: 'Nenhuma alteração enviada.' });
+      res.status(400).json({ error: 'Nenhuma alteração enviada.' });
+      return;
     }
 
-    const data = {};
+    const data: { monthlyQuota?: number; usedTokens?: number } = {};
     if (body.monthlyQuota !== undefined) data.monthlyQuota = body.monthlyQuota;
     if (body.resetUsedTokens) data.usedTokens = 0;
 
     const org = await prisma.organization.update({
-      where: { id: req.organizationId },
+      where: { id: req.organizationId! },
       data,
       select: { id: true, name: true, monthlyQuota: true, usedTokens: true },
     });
 
     const monthlyQuota = org.monthlyQuota ?? 0;
-    const usedTokens = org.usedTokens ?? 0;
-    const remaining = Math.max(0, monthlyQuota - usedTokens);
+    const usedTokens   = org.usedTokens   ?? 0;
+    const remaining    = Math.max(0, monthlyQuota - usedTokens);
 
     res.json({
       period: periodKeyUtc(),
@@ -66,5 +69,4 @@ router.put('/', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (req, re
   } catch (err) { next(err); }
 });
 
-module.exports = router;
-
+export default router;

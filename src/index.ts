@@ -1,18 +1,31 @@
-require('dotenv').config();
-const express     = require('express');
-const cors        = require('cors');
-const helmet      = require('helmet');
-const compression = require('compression');
-const rateLimit   = require('express-rate-limit');
-const { prisma }  = require('./utils/prisma');
-const logger      = require('./utils/logger');
-const { errorHandler }     = require('./middleware/errorHandler');
-const { cleanExpiredSessions } = require('./utils/jwt');
-const swaggerUi = require('swagger-ui-express');
-const swaggerJsdoc = require('swagger-jsdoc');
+import 'dotenv/config';
+import path from 'path';
+import express, { Request, Response, NextFunction } from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import { Prisma } from '@prisma/client';
+import compression from 'compression';
+import rateLimit from 'express-rate-limit';
+import swaggerUi from 'swagger-ui-express';
+import swaggerJsdoc from 'swagger-jsdoc';
+import { prisma } from './utils/prisma';
+import logger from './utils/logger';
+import { errorHandler } from './middleware/errorHandler';
+import { cleanExpiredSessions } from './utils/jwt';
+import authRouter from './routes/auth';
+import eventsRouter from './routes/events';
+import suggestionsRouter from './routes/suggestions';
+import feedbackRouter from './routes/feedback';
+import metricsRouter from './routes/metrics';
+import settingsRouter from './routes/settings';
+import aiRouter from './routes/ai';
+import templatesRouter from './routes/templates';
+import usersRouter from './routes/users';
+import knowledgeBasesRouter from './routes/knowledgeBases';
+import quotaRouter from './routes/quota';
 
 // ── Swagger Configuration ────────────────────────────────────
-const swaggerOptions = {
+const swaggerOptions: swaggerJsdoc.Options = {
   definition: {
     openapi: '3.0.0',
     info: {
@@ -35,7 +48,7 @@ const swaggerOptions = {
     },
     security: [{ bearerAuth: [] }],
   },
-  apis: ['./src/routes/*.js'], // Caminho para os arquivos de rotas com anotações JSDoc
+  apis: [path.join(__dirname, 'routes', '*.js')],
 };
 
 const swaggerSpec = swaggerJsdoc(swaggerOptions);
@@ -61,43 +74,34 @@ const ENV  = process.env.NODE_ENV || 'development';
 // ── Trust proxy (necessário no Render) ───────────────────────
 app.set('trust proxy', 1);
 
-// ── CORS — configurado ANTES de helmet e de tudo mais ────────
-// ⚠️  IMPORTANTE: O cors() precisa ser o PRIMEIRO middleware para que
-//    erros de preflight (OPTIONS) e respostas de erro também incluam
-//    os headers Access-Control-Allow-Origin corretos.
-
+// ── CORS ─────────────────────────────────────────────────────
 const extraOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim()).filter(Boolean)
   : [];
 
-// Origens sempre permitidas (hardcoded + extras do .env)
 const ALWAYS_ALLOWED = [
   'https://chatplay.com.br',
-  'https://backend-assistant-0x1d.onrender.com', // self-requests
-  'https://assistant-chat-if83.onrender.com',     // painel admin no Render
-  'https://admin-assistant-chat.onrender.com',    // URL alternativa do admin
-  'http://localhost:5173',                         // admin dev (Vite)
+  'https://backend-assistant-0x1d.onrender.com',
+  'https://assistant-chat-if83.onrender.com',
+  'https://admin-assistant-chat.onrender.com',
+  'http://localhost:5173',
   'http://localhost:3000',
   'http://localhost:3001',
 ];
 const allowedOrigins = [...new Set([...ALWAYS_ALLOWED, ...extraOrigins])];
 
-const corsOptions = {
-  origin: (origin, callback) => {
-    // Sem Origin: Postman, curl, service workers, requests internos → OK
+const corsOptions: cors.CorsOptions = {
+  origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
     if (!origin) return callback(null, true);
 
-    // Extensões Chrome/Edge → sempre permitir (autenticadas por JWT Bearer)
     if (origin.startsWith('chrome-extension://') || origin.startsWith('moz-extension://')) {
       return callback(null, true);
     }
 
-    // Origens permitidas
     if (allowedOrigins.some(o => origin === o || origin.startsWith(o))) {
       return callback(null, true);
     }
 
-    // Bloquear origin desconhecida
     logger.warn({ event: 'cors.blocked', origin });
     callback(new Error(`CORS: origem não permitida — ${origin}`));
   },
@@ -105,24 +109,21 @@ const corsOptions = {
   methods:     ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
   exposedHeaders: ['X-Token-Expires'],
-  maxAge: 86400, // cache preflight por 24h
+  maxAge: 86400,
 };
 
-// Aplicar CORS globalmente — responde a OPTIONS automaticamente
 app.use(cors(corsOptions));
-
-// Handler explícito para OPTIONS (preflight) — garante 200 mesmo antes do auth
 app.options('*', cors(corsOptions));
 
 // ── Segurança e parsers ──────────────────────────────────────
 app.use(helmet({
-  crossOriginResourcePolicy: { policy: 'cross-origin' }, // necessário para extensões
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
 }));
 app.use(compression());
 app.use(express.json({ limit: '2mb' }));
 
 // ── Logging de requisições HTTP ──────────────────────────────
-app.use((req, res, next) => {
+app.use((req: Request, res: Response, next: NextFunction) => {
   const start = Date.now();
   res.on('finish', () => logger.request(req, res, Date.now() - start));
   next();
@@ -139,17 +140,16 @@ const globalLimiter = rateLimit({
 });
 
 const authLimiter = rateLimit({
-  windowMs:  15 * 60 * 1000, // 15 min
+  windowMs:  15 * 60 * 1000,
   max:        10,
   message: { error: 'Muitas tentativas de login. Tente novamente em 15 minutos.' },
 });
 
-// AI limiter por usuário — 60 req/min para comportar equipes maiores
 const aiLimiter = rateLimit({
   windowMs:  60 * 1000,
   max:        60,
   message: { error: 'Limite de requisições de IA atingido. Aguarde 1 minuto.' },
-  keyGenerator: (req) => req.user?.id || req.ip,
+  keyGenerator: (req) => (req.user as { id?: string } | undefined)?.id || req.ip || 'unknown',
 });
 
 app.use('/api', globalLimiter);
@@ -158,71 +158,65 @@ app.use('/api/auth/register', authLimiter);
 app.use('/api/ai',            aiLimiter);
 
 // ── Middleware: DB Health Guard ──────────────────────────────
-// Bloqueia /api/* com 503 quando o banco está offline (detectado periodicamente)
 let _dbOnline = true;
-let _dbCheckTs = 0;
-const DB_CHECK_INTERVAL = 30_000; // 30s
+const DB_CHECK_INTERVAL = 30_000;
 
-async function checkDbHealth() {
+async function checkDbHealth(): Promise<void> {
   try {
-    // Tenta uma query simples de conexão
     await prisma.$queryRaw`SELECT 1`;
     if (!_dbOnline) {
       logger.info({ event: 'db.reconnected', msg: 'Conexão com o banco de dados restabelecida.' });
     }
     _dbOnline = true;
-  } catch (err) {
+  } catch (err: unknown) {
     if (_dbOnline) {
-      logger.error({ 
-        event: 'db.disconnected', 
-        msg: 'Conexão com o banco de dados perdida.', 
-        error: err.message?.slice(0, 200) 
+      logger.error({
+        event: 'db.disconnected',
+        msg: 'Conexão com o banco de dados perdida.',
+        error: (err instanceof Error ? err.message : String(err))?.slice(0, 200),
       });
     }
     _dbOnline = false;
   }
-  _dbCheckTs = Date.now();
 }
-// Verificação inicial e recorrente
 checkDbHealth();
 setInterval(checkDbHealth, DB_CHECK_INTERVAL);
 
-// Rotas que DEVEM funcionar mesmo com banco offline (para permitir login/carregamento básico)
 const DB_EXEMPT = ['/api/auth/login', '/api/auth/register', '/api/auth/me', '/health', '/api-docs'];
 
-app.use('/api', (req, res, next) => {
-  // Se banco offline e rota não é exempta, retornar 503
+app.use('/api', (req: Request, res: Response, next: NextFunction) => {
   const isExempt = DB_EXEMPT.some(p => {
     const pathWithoutApi = req.path.startsWith('/api') ? req.path : `/api${req.path}`;
     return pathWithoutApi.startsWith(p);
   });
 
   if (!_dbOnline && !isExempt) {
-    return res.status(503).json({
+    res.status(503).json({
       error:  'Banco de dados temporariamente indisponível. Tente novamente em instantes.',
       detail: 'O servidor está aguardando reconexão com o banco de dados (Supabase). Verifique o DATABASE_URL no Render.',
       retryAfter: 30,
     });
+    return;
   }
   next();
 });
 
 // ── Rotas ────────────────────────────────────────────────────
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
-app.use('/api/auth',            require('./routes/auth'));
-app.use('/api/events',          require('./routes/events'));
-app.use('/api/suggestions',     require('./routes/suggestions'));
-app.use('/api/feedback',        require('./routes/feedback'));
-app.use('/api/metrics',         require('./routes/metrics'));
-app.use('/api/settings',        require('./routes/settings'));
-app.use('/api/ai',              require('./routes/ai'));
-app.use('/api/templates',       require('./routes/templates'));
-app.use('/api/users',           require('./routes/users'));
-app.use('/api/knowledge-bases', require('./routes/knowledgeBases'));
-app.use('/api/quota',           require('./routes/quota'));
+app.use('/api/auth',            authRouter);
+app.use('/api/events',          eventsRouter);
+app.use('/api/suggestions',     suggestionsRouter);
+app.use('/api/feedback',        feedbackRouter);
+app.use('/api/metrics',         metricsRouter);
+app.use('/api/settings',        settingsRouter);
+app.use('/api/ai',              aiRouter);
+app.use('/api/templates',       templatesRouter);
+app.use('/api/users',           usersRouter);
+app.use('/api/knowledge-bases', knowledgeBasesRouter);
+app.use('/api/quota',           quotaRouter);
 
 // ── Health check — verifica DB real ─────────────────────────
-app.get('/health', async (req, res) => {
+app.get('/health', async (req: Request, res: Response) => {
   const startTime = Date.now();
   try {
     await prisma.$queryRaw`SELECT 1`;
@@ -235,8 +229,8 @@ app.get('/health', async (req, res) => {
       latency: Date.now() - startTime,
       ts:      new Date().toISOString(),
     });
-  } catch (dbErr) {
-    logger.error({ event: 'health.db_error', err: dbErr.message });
+  } catch (dbErr: unknown) {
+    logger.error({ event: 'health.db_error', err: dbErr instanceof Error ? dbErr.message : String(dbErr) });
     res.status(503).json({
       status:  'degraded',
       version: '1.1.0',
@@ -248,7 +242,7 @@ app.get('/health', async (req, res) => {
 });
 
 // ── 404 ──────────────────────────────────────────────────────
-app.use((req, res) => {
+app.use((req: Request, res: Response) => {
   res.status(404).json({ error: `Rota não encontrada: ${req.method} ${req.path}` });
 });
 
@@ -256,7 +250,7 @@ app.use((req, res) => {
 app.use(errorHandler);
 
 // ── Graceful shutdown ────────────────────────────────────────
-async function shutdown(signal) {
+async function shutdown(signal: string) {
   logger.info({ event: 'shutdown.signal', signal });
   await prisma.$disconnect();
   process.exit(0);
@@ -267,27 +261,27 @@ process.on('SIGINT',  () => shutdown('SIGINT'));
 // ── Start ────────────────────────────────────────────────────
 async function start() {
   try {
-    const dbUrl = process.env.DATABASE_URL || '';
-    const directUrl = process.env.DIRECT_URL || '';
-    const mask = (url) => url.replace(/:([^@]+)@/, ':****@');
+    const dbUrl    = process.env.DATABASE_URL || '';
+    const directUrl = process.env.DIRECT_URL  || '';
+    const mask = (url: string) => url.replace(/:([^@]+)@/, ':****@');
 
     logger.info({ event: 'startup.env_check', databaseUrl: mask(dbUrl), directUrl: mask(directUrl) });
 
     await prisma.$connect();
     logger.info({ event: 'startup.db_connected' });
-  } catch (err) {
-    logger.error({ event: 'startup.db_failed', err: err.message });
+  } catch (err: unknown) {
+    logger.error({ event: 'startup.db_failed', err: (err as Error).message });
     process.exit(1);
   }
 
   app.listen(PORT, () => {
     logger.info({
-      event:        'startup.server_ready',
-      port:         PORT,
-      env:          ENV,
-      health:       `http://localhost:${PORT}/health`,
-      version:      '1.1.0',
-      allowedCors:  allowedOrigins,
+      event:       'startup.server_ready',
+      port:        PORT,
+      env:         ENV,
+      health:      `http://localhost:${PORT}/health`,
+      version:     '1.1.0',
+      allowedCors: allowedOrigins,
     });
   });
 
@@ -296,8 +290,8 @@ async function start() {
     try {
       const count = await cleanExpiredSessions();
       if (count > 0) logger.info({ event: 'cleanup.sessions', removed: count });
-    } catch (err) {
-      logger.warn({ event: 'cleanup.sessions_error', err: err.message });
+    } catch (err: unknown) {
+      logger.warn({ event: 'cleanup.sessions_error', err: (err as Error).message });
     }
   }, 3600 * 1000);
 
@@ -322,7 +316,7 @@ async function start() {
       });
       const prevByOrg = new Map(settings.map(s => [s.organizationId, String(s.value)]));
 
-      const tx = [];
+      const tx: Prisma.PrismaPromise<unknown>[] = [];
       for (const org of orgs) {
         const prev = prevByOrg.get(org.id);
         if (prev !== period) {
@@ -345,8 +339,8 @@ async function start() {
         await prisma.$transaction(tx);
         logger.info({ event: 'quota.reset', period, orgs: tx.length / 2 });
       }
-    } catch (err) {
-      logger.warn({ event: 'quota.reset_error', err: err.message });
+    } catch (err: unknown) {
+      logger.warn({ event: 'quota.reset_error', err: (err as Error).message });
     }
   };
 
@@ -355,4 +349,4 @@ async function start() {
 }
 
 start();
-module.exports = app;
+export default app;

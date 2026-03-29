@@ -1,16 +1,52 @@
-const logger = require('../utils/logger');
+import logger from '../utils/logger';
 
 const OPENAI_URL = 'https://api.openai.com/v1/chat/completions';
 
-function renderTemplate(template, vars) {
+interface OpenAIMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+}
+
+interface CallOpenAIOptions {
+  messages: OpenAIMessage[];
+  model?: string;
+  temperature?: number;
+  max_tokens?: number;
+  timeoutMs?: number;
+}
+
+interface GenerateSuggestionsOptions {
+  context: string;
+  question: string;
+  category: string;
+  topExamples?: string[];
+  avoidPatterns?: string[];
+  knowledgeBases?: Record<string, unknown>;
+  promptTemplate?: string;
+  model?: string;
+  temperature?: number;
+  maxTokens?: number;
+}
+
+interface GenerateChatReplyOptions {
+  message: string;
+  history?: OpenAIMessage[];
+  systemPromptTemplate?: string;
+  dbKnowledgeBases?: Record<string, unknown>;
+  model?: string;
+  temperature?: number;
+  maxTokens?: number;
+}
+
+function renderTemplate(template: string, vars?: Record<string, string>): string {
   if (!template || typeof template !== 'string') return '';
-  return template.replace(/\{\{([A-Z0-9_]+)\}\}/g, (_, k) => {
+  return template.replace(/\{\{([A-Z0-9_]+)\}\}/g, (_, k: string) => {
     const v = vars?.[k];
     return v === undefined || v === null ? '' : String(v);
   });
 }
 
-function clipText(value, maxChars) {
+function clipText(value: unknown, maxChars: number): string {
   if (!value) return '';
   const s = String(value);
   if (s.length <= maxChars) return s;
@@ -18,23 +54,28 @@ function clipText(value, maxChars) {
 }
 
 // ── Retry com backoff exponencial ───────────────────────────
-async function withRetry(fn, { retries = 3, baseDelayMs = 500, label = 'openai' } = {}) {
-  let lastErr;
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  { retries = 3, baseDelayMs = 500, label = 'openai' }: { retries?: number; baseDelayMs?: number; label?: string } = {}
+): Promise<T> {
+  let lastErr: unknown;
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       return await fn();
     } catch (err) {
       lastErr = err;
-      const isRetryable = err.message?.includes('529') || // OpenAI overloaded
-                          err.message?.includes('503') ||
-                          err.message?.includes('502') ||
-                          err.message?.includes('ECONNRESET') ||
-                          err.message?.includes('ETIMEDOUT');
+      const msg = (err as Error).message || '';
+      const isRetryable =
+        msg.includes('529') ||
+        msg.includes('503') ||
+        msg.includes('502') ||
+        msg.includes('ECONNRESET') ||
+        msg.includes('ETIMEDOUT');
 
       if (!isRetryable || attempt === retries) break;
 
       const delay = baseDelayMs * Math.pow(2, attempt - 1) + Math.random() * 200;
-      logger.warn({ event: `${label}.retry`, attempt, delay: Math.round(delay), err: err.message });
+      logger.warn({ event: `${label}.retry`, attempt, delay: Math.round(delay), err: msg });
       await new Promise(r => setTimeout(r, delay));
     }
   }
@@ -48,10 +89,10 @@ async function callOpenAI({
   temperature = 0.7,
   max_tokens  = 500,
   timeoutMs   = 30_000,
-}) {
+}: CallOpenAIOptions): Promise<Record<string, unknown>> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
-    const err = new Error('Serviço de IA não configurado no servidor. Contate o administrador.');
+    const err = new Error('Serviço de IA não configurado no servidor. Contate o administrador.') as Error & { statusCode: number };
     err.statusCode = 503;
     throw err;
   }
@@ -72,14 +113,15 @@ async function callOpenAI({
       });
 
       if (!response.ok) {
-        const err = await response.json().catch(() => ({}));
-        const msg = err?.error?.message || `OpenAI HTTP ${response.status}`;
-        const e = new Error(msg);
+        const errBody = await response.json().catch(() => ({})) as Record<string, unknown>;
+        const errObj = errBody?.error as Record<string, unknown> | undefined;
+        const msg = (errObj?.message as string) || `OpenAI HTTP ${response.status}`;
+        const e = new Error(msg) as Error & { statusCode: number };
         e.statusCode = 502;
         throw e;
       }
 
-      return response.json();
+      return response.json() as Promise<Record<string, unknown>>;
     } finally {
       clearTimeout(timer);
     }
@@ -98,7 +140,12 @@ async function generateSuggestions({
   model,
   temperature,
   maxTokens,
-}) {
+}: GenerateSuggestionsOptions): Promise<{
+  suggestions: string[];
+  latencyMs: number;
+  model: string;
+  tokensUsed: number | undefined;
+}> {
   const kb = Object.fromEntries(
     Object.entries(knowledgeBases || {}).map(([k, v]) => [String(k).toLowerCase().trim(), v])
   );
@@ -146,13 +193,13 @@ NÃO use numeração nem prefixos como "Resposta 1:".`;
 
   const prompt = (promptTemplate && promptTemplate.trim().length > 0)
     ? renderTemplate(promptTemplate, {
-        BASE_COREN:     baseCoren,
-        BASE_SISTEMA:  baseChat,
-        AVOID_BLOCK:   avoidBlock.trim(),
-        EXAMPLES_BLOCK: examplesBlock.trim(),
-        CONTEXT:       clipText(context, 12_000),
-        QUESTION:      question,
-        CATEGORY:      category,
+        BASE_COREN:      baseCoren,
+        BASE_SISTEMA:    baseChat,
+        AVOID_BLOCK:     avoidBlock.trim(),
+        EXAMPLES_BLOCK:  examplesBlock.trim(),
+        CONTEXT:         clipText(context, 12_000),
+        QUESTION:        question,
+        CATEGORY:        category,
       }).trim()
     : defaultPrompt;
 
@@ -169,12 +216,14 @@ NÃO use numeração nem prefixos como "Resposta 1:".`;
   });
 
   const latencyMs = Date.now() - start;
-  const text = data.choices[0].message.content;
+  const choices = data.choices as Array<{ message: { content: string } }>;
+  const text = choices[0].message.content;
+  const usage = data.usage as { total_tokens?: number } | undefined;
 
   const suggestions = text
     .split(/\n\s*\n/)
-    .map(s => s.trim())
-    .filter(s => s.length > 20)
+    .map((s: string) => s.trim())
+    .filter((s: string) => s.length > 20)
     .slice(0, 3);
 
   // Garantir pelo menos 1 sugestão mesmo se parsing falhar
@@ -187,41 +236,42 @@ NÃO use numeração nem prefixos como "Resposta 1:".`;
     category,
     count:      suggestions.length,
     latencyMs,
-    tokens:     data.usage?.total_tokens,
+    tokens:     usage?.total_tokens,
     model:      data.model,
   });
 
   return {
     suggestions,
     latencyMs,
-    model:      data.model,
-    tokensUsed: data.usage?.total_tokens,
+    model:      data.model as string,
+    tokensUsed: usage?.total_tokens,
   };
 }
 
 // ── generateEmbedding — gera vetor para RAG ─────────────────
-async function generateEmbedding(text) {
+async function generateEmbedding(text: string): Promise<number[]> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error('OpenAI API Key não configurada.');
 
   const res = await fetch('https://api.openai.com/v1/embeddings', {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/json',
+      'Content-Type':  'application/json',
       'Authorization': `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
       model: 'text-embedding-3-small',
-      input: text.slice(0, 8000), // limite seguro p/ tokens
+      input: text.slice(0, 8000),
     }),
   });
 
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err?.error?.message || `OpenAI Embedding HTTP ${res.status}`);
+    const errBody = await res.json().catch(() => ({})) as Record<string, unknown>;
+    const errObj = errBody?.error as Record<string, unknown> | undefined;
+    throw new Error((errObj?.message as string) || `OpenAI Embedding HTTP ${res.status}`);
   }
 
-  const data = await res.json();
+  const data = await res.json() as { data: Array<{ embedding: number[] }> };
   return data.data[0].embedding;
 }
 
@@ -234,7 +284,11 @@ async function generateChatReply({
   model,
   temperature,
   maxTokens,
-}) {
+}: GenerateChatReplyOptions): Promise<{
+  reply: string;
+  latencyMs: number;
+  tokensUsed: number | undefined;
+}> {
   const kb = Object.fromEntries(
     Object.entries(dbKnowledgeBases || {}).map(([k, v]) => [String(k).toLowerCase().trim(), v])
   );
@@ -247,7 +301,7 @@ async function generateChatReply({
 
   const safeHistory = (Array.isArray(history) ? history : [])
     .map(m => ({
-      role: m?.role === 'user' ? 'user' : 'assistant',
+      role: m?.role === 'user' ? 'user' : 'assistant' as 'user' | 'assistant',
       content: String(m?.content || ''),
     }))
     .filter(m => m.content.trim() !== '')
@@ -262,7 +316,7 @@ async function generateChatReply({
 
   if (systemPromptTemplate && systemPromptTemplate.trim().length > 0) {
     systemContent = renderTemplate(systemPromptTemplate, {
-      BASE_COREN:    baseCoren,
+      BASE_COREN:   baseCoren,
       BASE_SISTEMA: baseSist,
       MESSAGE:      message,
       HISTORY:      clipText(historyText, 6_000),
@@ -279,9 +333,9 @@ ${baseSist}
 IMPORTANTE: Responda de forma natural, clara e útil. Use emojis quando apropriado.`;
   }
 
-  const messages = [
+  const messages: OpenAIMessage[] = [
     { role: 'system', content: systemContent },
-    ...safeHistory.slice(-6),    // últimas 6 trocas para continuidade da conversa
+    ...safeHistory.slice(-6),
     { role: 'user',   content: message },
   ];
 
@@ -294,20 +348,23 @@ IMPORTANTE: Responda de forma natural, clara e útil. Use emojis quando apropria
   });
   const latencyMs = Date.now() - start;
 
+  const choices = data.choices as Array<{ message: { content: string } }>;
+  const usage = data.usage as { total_tokens?: number } | undefined;
+
   logger.info({
-    event:             'openai.chat_ok',
+    event:            'openai.chat_ok',
     latencyMs,
-    tokens:            data.usage?.total_tokens,
-    model:             data.model,
-    hasKnowledgeBase:  !!(baseCorenObj || baseSistObj),
-    hasSystemPrompt:   systemPromptTemplate.trim().length > 0,
+    tokens:           usage?.total_tokens,
+    model:            data.model,
+    hasKnowledgeBase: !!(baseCorenObj || baseSistObj),
+    hasSystemPrompt:  systemPromptTemplate.trim().length > 0,
   });
 
   return {
-    reply:      data.choices[0].message.content,
+    reply:      choices[0].message.content,
     latencyMs,
-    tokensUsed: data.usage?.total_tokens,
+    tokensUsed: usage?.total_tokens,
   };
 }
 
-module.exports = { callOpenAI, generateSuggestions, generateChatReply };
+export { callOpenAI, generateSuggestions, generateChatReply, generateEmbedding };

@@ -2,13 +2,14 @@
 FROM node:20-alpine AS builder
 
 WORKDIR /app
-COPY package*.json ./
-RUN npm ci --only=production
+COPY package*.json tsconfig.json ./
+RUN npm ci
 
-COPY . .
-
-# Gerar Prisma Client
+COPY prisma ./prisma
 RUN npx prisma generate
+
+COPY src ./src
+RUN npx tsc
 
 # ── Runtime stage ─────────────────────────────────────────────
 FROM node:20-alpine
@@ -18,14 +19,12 @@ RUN apk add --no-cache dumb-init
 WORKDIR /app
 ENV NODE_ENV=production
 
-# Copiar apenas o necessário
+COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/src ./src
-COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/package.json ./
+COPY --from=builder /app/prisma ./prisma
 
-# Expor porta
+USER node
 EXPOSE 3001
 
-# Entrypoint: force schema sync using DIRECT_URL THEN start
-CMD ["dumb-init", "sh", "-c", "DATABASE_URL=$DIRECT_URL npx prisma db push --accept-data-loss --skip-generate && node src/index.js"]
+CMD ["dumb-init", "node", "dist/index.js"]

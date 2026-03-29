@@ -1,37 +1,37 @@
-const jwt    = require('jsonwebtoken');
-const { prisma } = require('./prisma');
+import jwt from 'jsonwebtoken';
+import { prisma } from './prisma';
 
-const ACCESS_TTL_HOURS   = parseInt(process.env.JWT_TTL_HOURS    || '8');
-const REFRESH_TTL_DAYS   = parseInt(process.env.JWT_REFRESH_DAYS || '30');
+const ACCESS_TTL_HOURS  = parseInt(process.env.JWT_TTL_HOURS    || '8');
+const REFRESH_TTL_DAYS  = parseInt(process.env.JWT_REFRESH_DAYS || '30');
 
 // ── Access Token (sessão curta) ──────────────────────────────
-async function createSession(userId) {
+export async function createSession(userId: string): Promise<{ token: string; expiresAt: Date }> {
   const expiresAt = new Date(Date.now() + ACCESS_TTL_HOURS * 3600 * 1000);
 
   const token = jwt.sign(
     { sub: userId, type: 'access' },
-    process.env.JWT_SECRET,
+    process.env.JWT_SECRET!,
     { expiresIn: `${ACCESS_TTL_HOURS}h` }
   );
 
-  await prisma.session.create({ 
-    data: { 
-      userId, 
-      token, 
+  await prisma.session.create({
+    data: {
+      userId,
+      token,
       type: 'ACCESS',
-      expiresAt 
-    } 
+      expiresAt,
+    },
   });
   return { token, expiresAt };
 }
 
 // ── Refresh Token (sessão longa) ─────────────────────────────
-async function createRefreshToken(userId) {
+export async function createRefreshToken(userId: string): Promise<{ refreshToken: string; expiresAt: Date }> {
   const expiresAt = new Date(Date.now() + REFRESH_TTL_DAYS * 24 * 3600 * 1000);
 
   const refreshToken = jwt.sign(
     { sub: userId, type: 'refresh' },
-    process.env.JWT_SECRET,
+    process.env.JWT_SECRET!,
     { expiresIn: `${REFRESH_TTL_DAYS}d` }
   );
 
@@ -48,31 +48,36 @@ async function createRefreshToken(userId) {
 }
 
 // ── Revogar sessão ───────────────────────────────────────────
-async function revokeSession(token) {
-  await prisma.session.updateMany({ 
+export async function revokeSession(token: string): Promise<void> {
+  await prisma.session.updateMany({
     where: { token },
-    data: { isRevoked: true }
+    data: { isRevoked: true },
   });
 }
 
 // ── Limpeza de sessões expiradas ─────────────────────────────
-async function cleanExpiredSessions() {
+export async function cleanExpiredSessions(): Promise<number> {
   const { count } = await prisma.session.deleteMany({
-    where: { 
+    where: {
       OR: [
         { expiresAt: { lt: new Date() } },
-        { isRevoked: true, type: 'ACCESS' } // Limpa access tokens revogados
-      ]
+        { isRevoked: true, type: 'ACCESS' },
+      ],
     },
   });
   return count;
 }
 
 // ── Renovar access token a partir do refresh token ───────────
-async function refreshAccessToken(refreshToken) {
-  let payload;
+export async function refreshAccessToken(refreshToken: string): Promise<{
+  token: string;
+  expiresAt: Date;
+  refreshToken: string;
+  refreshExpiresAt: Date;
+}> {
+  let payload: jwt.JwtPayload;
   try {
-    payload = jwt.verify(refreshToken, process.env.JWT_SECRET);
+    payload = jwt.verify(refreshToken, process.env.JWT_SECRET!) as jwt.JwtPayload;
   } catch {
     throw new Error('Refresh token inválido.');
   }
@@ -87,7 +92,7 @@ async function refreshAccessToken(refreshToken) {
   }
 
   // Verificar se o usuário ainda está ativo
-  const user = await prisma.user.findUnique({ where: { id: payload.sub } });
+  const user = await prisma.user.findUnique({ where: { id: payload.sub as string } });
   if (!user || !user.isActive) {
     throw new Error('Usuário inativo ou não encontrado.');
   }
@@ -101,18 +106,10 @@ async function refreshAccessToken(refreshToken) {
     createRefreshToken(user.id),
   ]);
 
-  return { 
-    token: access.token, 
-    expiresAt: access.expiresAt,
-    refreshToken: refresh.refreshToken,
-    refreshExpiresAt: refresh.expiresAt
+  return {
+    token:            access.token,
+    expiresAt:        access.expiresAt,
+    refreshToken:     refresh.refreshToken,
+    refreshExpiresAt: refresh.expiresAt,
   };
 }
-
-module.exports = {
-  createSession,
-  createRefreshToken,
-  refreshAccessToken,
-  revokeSession,
-  cleanExpiredSessions,
-};
