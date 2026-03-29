@@ -12,6 +12,21 @@ jobs:
     permissions:
       contents: read
 
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v4
 
@@ -29,9 +44,12 @@ jobs:
       - name: TypeScript Build
         run: npx tsc --noEmit
 
+      - name: Lint
+        run: npx eslint src/ --ext .ts
+
       - name: Run tests
         run: npm test
         env:
           NODE_ENV: test
-          JWT_SECRET: test-secret-ci
+          JWT_SECRET: test-secret-for-ci-testing
           DATABASE_URL: "postgresql://test:test@localhost:5432/test"
