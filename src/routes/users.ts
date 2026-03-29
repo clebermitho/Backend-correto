@@ -8,20 +8,34 @@ import logger from '../utils/logger';
 
 const router = Router();
 
+const HEARTBEAT_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+
 const USER_SELECT = {
   id: true, name: true, email: true, username: true, role: true,
-  isActive: true, lastSeenAt: true, createdAt: true,
+  isActive: true, lastSeenAt: true, lastHeartbeatAt: true, createdAt: true,
   dailyChatLimit: true, dailySuggestionLimit: true,
 };
 
-// ── Auxiliar: verificar se usuário tem sessão ativa ──────────
+// ── Auxiliar: verificar se usuário tem sessão ativa e heartbeat recente ──
 async function isUserOnline(userId: string): Promise<boolean> {
   const now = new Date();
-  const active = await prisma.session.findFirst({
+  const tenMinutesAgo = new Date(now.getTime() - HEARTBEAT_TIMEOUT_MS);
+
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { lastHeartbeatAt: true },
+  });
+
+  if (!user?.lastHeartbeatAt || user.lastHeartbeatAt < tenMinutesAgo) {
+    return false;
+  }
+
+  const activeSession = await prisma.session.findFirst({
     where: { userId, isRevoked: false, expiresAt: { gt: now } },
     select: { id: true },
   });
-  return !!active;
+
+  return !!activeSession;
 }
 
 // ── Auxiliar: obter limite efetivo do usuário ────────────────
@@ -58,12 +72,27 @@ router.get('/', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (req: Re
     });
 
     const now = new Date();
+    const tenMinutesAgo = new Date(now.getTime() - HEARTBEAT_TIMEOUT_MS);
     const userIds = users.map(u => u.id);
-    const activeSessions = await prisma.session.findMany({
-      where: { userId: { in: userIds }, isRevoked: false, expiresAt: { gt: now } },
-      select: { userId: true },
-      distinct: ['userId'],
-    });
+
+    // Only consider users with a recent heartbeat (within 10 minutes)
+    const recentHeartbeatIds = new Set(
+      users
+        .filter(u => u.lastHeartbeatAt && u.lastHeartbeatAt >= tenMinutesAgo)
+        .map(u => u.id)
+    );
+
+    const activeSessions = recentHeartbeatIds.size > 0
+      ? await prisma.session.findMany({
+          where: {
+            userId: { in: [...recentHeartbeatIds] },
+            isRevoked: false,
+            expiresAt: { gt: now },
+          },
+          select: { userId: true },
+          distinct: ['userId'],
+        })
+      : [];
     const onlineSet = new Set(activeSessions.map(s => s.userId));
 
     const enriched = users.map(u => ({ ...u, isOnline: onlineSet.has(u.id) }));

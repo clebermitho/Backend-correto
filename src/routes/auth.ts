@@ -10,8 +10,8 @@ import logger from '../utils/logger';
 const router = Router();
 
 const loginSchema = z.object({
-  email:    z.string().email('E-mail inválido.').optional(),
-  username: z.string().min(1).optional(),
+  email:    z.string().email('E-mail inválido.').optional().or(z.literal('')),
+  username: z.string().min(1).optional().or(z.literal('')),
   password: z.string().min(1, 'Senha obrigatória.'),
 });
 
@@ -48,25 +48,28 @@ router.post('/login', async (req: Request, res: Response, next: NextFunction): P
   try {
     const { email, username, password } = loginSchema.parse(req.body);
 
-    if (!email && !username) {
+    const emailVal    = email    && email.trim()    ? email    : undefined;
+    const usernameVal = username && username.trim() ? username : undefined;
+
+    if (!emailVal && !usernameVal) {
       res.status(400).json({ error: 'Informe e-mail ou username.' });
       return;
     }
 
-    const user = email
-      ? await prisma.user.findUnique({ where: { email: email.toLowerCase().trim() }, include: { organization: true } })
-      : await prisma.user.findUnique({ where: { username: username!.trim() }, include: { organization: true } });
+    const user = emailVal
+      ? await prisma.user.findUnique({ where: { email: emailVal.toLowerCase().trim() }, include: { organization: true } })
+      : await prisma.user.findUnique({ where: { username: usernameVal!.trim() }, include: { organization: true } });
 
     // Resposta genérica intencional (sem revelar se o e-mail existe)
     if (!user || !user.isActive) {
-      logger.warn({ event: 'auth.login_failed', email, username, reason: user ? 'inactive' : 'not_found', ip: req.ip });
+      logger.warn({ event: 'auth.login_failed', email: emailVal, username: usernameVal, reason: user ? 'inactive' : 'not_found', ip: req.ip });
       res.status(401).json({ error: 'Credenciais inválidas.' });
       return;
     }
 
     const valid = await bcrypt.compare(password, user.passwordHash);
     if (!valid) {
-      logger.warn({ event: 'auth.login_failed', email, username, reason: 'wrong_password', ip: req.ip });
+      logger.warn({ event: 'auth.login_failed', email: emailVal, username: usernameVal, reason: 'wrong_password', ip: req.ip });
       res.status(401).json({ error: 'Credenciais inválidas.' });
       return;
     }
@@ -83,7 +86,7 @@ router.post('/login', async (req: Request, res: Response, next: NextFunction): P
     prisma.user.update({ where: { id: user.id }, data: { lastSeenAt: new Date() } }).catch(() => {});
 
     log({ organizationId: user.organizationId, userId: user.id, eventType: 'auth.login', req });
-    logger.info({ event: 'auth.login_ok', userId: user.id, email, username, ip: req.ip });
+    logger.info({ event: 'auth.login_ok', userId: user.id, email: emailVal, username: usernameVal, ip: req.ip });
 
     res.json({
       token,
@@ -245,6 +248,13 @@ router.post('/register', async (req: Request, res: Response, next: NextFunction)
       orgId:  org.id,
     });
   } catch (err) { next(err); }
+});
+
+// ── POST /api/auth/heartbeat — atualiza lastHeartbeatAt ──────
+router.post('/heartbeat', requireAuth, (req: Request, res: Response): void => {
+  prisma.user.update({ where: { id: req.user!.id }, data: { lastHeartbeatAt: new Date() } })
+    .catch((err: Error) => logger.warn({ event: 'heartbeat.update_failed', userId: req.user!.id, err: err.message }));
+  res.json({ ok: true });
 });
 
 export default router;
