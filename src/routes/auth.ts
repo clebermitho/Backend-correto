@@ -1,11 +1,13 @@
-const router  = require('express').Router();
-const bcrypt  = require('bcryptjs');
-const { z }   = require('zod');
-const { prisma }         = require('../utils/prisma');
-const { createSession, createRefreshToken, revokeSession, refreshAccessToken } = require('../utils/jwt');
-const { requireAuth }    = require('../middleware/auth');
-const { log }            = require('../utils/audit');
-const logger             = require('../utils/logger');
+import { Router, Request, Response, NextFunction } from 'express';
+import bcrypt from 'bcryptjs';
+import { z } from 'zod';
+import { prisma } from '../utils/prisma';
+import { createSession, createRefreshToken, revokeSession, refreshAccessToken } from '../utils/jwt';
+import { requireAuth } from '../middleware/auth';
+import { log } from '../utils/audit';
+import logger from '../utils/logger';
+
+const router = Router();
 
 const loginSchema = z.object({
   email:    z.string().email('E-mail inválido.'),
@@ -41,7 +43,7 @@ const loginSchema = z.object({
  *       401:
  *         description: Credenciais inválidas
  */
-router.post('/login', async (req, res, next) => {
+router.post('/login', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const { email, password } = loginSchema.parse(req.body);
 
@@ -53,13 +55,15 @@ router.post('/login', async (req, res, next) => {
     // Resposta genérica intencional (sem revelar se o e-mail existe)
     if (!user || !user.isActive) {
       logger.warn({ event: 'auth.login_failed', email, reason: user ? 'inactive' : 'not_found', ip: req.ip });
-      return res.status(401).json({ error: 'Credenciais inválidas.' });
+      res.status(401).json({ error: 'Credenciais inválidas.' });
+      return;
     }
 
     const valid = await bcrypt.compare(password, user.passwordHash);
     if (!valid) {
       logger.warn({ event: 'auth.login_failed', email, reason: 'wrong_password', ip: req.ip });
-      return res.status(401).json({ error: 'Credenciais inválidas.' });
+      res.status(401).json({ error: 'Credenciais inválidas.' });
+      return;
     }
 
     const [
@@ -97,9 +101,7 @@ router.post('/login', async (req, res, next) => {
 });
 
 // ── POST /api/auth/refresh — renovar access token ────────────
-// IMPORTANTE: esta rota deve vir ANTES do module.exports e não usa requireAuth
-// (o usuário pode estar com token expirado — é exatamente por isso que precisa do refresh)
-router.post('/refresh', async (req, res, next) => {
+router.post('/refresh', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const { refreshToken } = z.object({
       refreshToken: z.string().min(1, 'refreshToken obrigatório.'),
@@ -109,33 +111,34 @@ router.post('/refresh', async (req, res, next) => {
     logger.info({ event: 'auth.token_refreshed' });
     res.json({ token, expiresAt });
   } catch (err) {
+    const e = err as Error;
     if (
-      err.message?.includes('inválido') ||
-      err.message?.includes('expirado') ||
-      err.message?.includes('revogado') ||
-      err.message?.includes('Refresh token')
+      e.message?.includes('inválido') ||
+      e.message?.includes('expirado') ||
+      e.message?.includes('revogado') ||
+      e.message?.includes('Refresh token')
     ) {
-      return res.status(401).json({ error: err.message });
+      res.status(401).json({ error: e.message });
+      return;
     }
     next(err);
   }
 });
 
 // ── POST /api/auth/logout ────────────────────────────────────
-router.post('/logout', requireAuth, async (req, res, next) => {
+router.post('/logout', requireAuth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
-    await revokeSession(req.sessionToken);
-    log({ organizationId: req.organizationId, userId: req.user.id, eventType: 'auth.logout', req });
-    logger.info({ event: 'auth.logout', userId: req.user.id });
+    await revokeSession(req.sessionToken!);
+    log({ organizationId: req.organizationId!, userId: req.user!.id, eventType: 'auth.logout', req });
+    logger.info({ event: 'auth.logout', userId: req.user!.id });
     res.json({ ok: true });
   } catch (err) { next(err); }
 });
 
 // ── GET /api/auth/me ─────────────────────────────────────────
-// Retorna { user, expiresAt } — consistente com o que o admin e a extensão esperam
-router.get('/me', requireAuth, async (req, res, next) => {
+router.get('/me', requireAuth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const u = req.user;
+    const u = req.user!;
 
     // Lazy lastSeenAt update — evita muitas escritas (atualiza apenas a cada 5 min)
     const threshold = 5 * 60 * 1000;
@@ -164,7 +167,7 @@ router.get('/me', requireAuth, async (req, res, next) => {
 });
 
 // ── POST /api/auth/register (bootstrap — primeiro admin) ─────
-router.post('/register', async (req, res, next) => {
+router.post('/register', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const userCount = await prisma.user.count();
     const isFirstRun = userCount === 0;
@@ -182,40 +185,44 @@ router.post('/register', async (req, res, next) => {
 
     // Segurança: se já houver usuários, exige o segredo. Se for o primeiro, permite (setup inicial).
     if (!isFirstRun && data.adminSecret !== process.env.ADMIN_BOOTSTRAP_SECRET) {
-      logger.warn({ 
-        event: 'auth.register_forbidden', 
-        email: data.email, 
+      logger.warn({
+        event: 'auth.register_forbidden',
+        email: data.email,
         reason: 'admin_secret_required_or_mismatch',
         userCount,
-        ip: req.ip 
+        ip: req.ip,
       });
-      return res.status(403).json({ 
-        error: 'Registro bloqueado.', 
-        details: isFirstRun ? 'Erro interno de configuração.' : 'O banco já possui usuários. Informe o adminSecret para criar novos administradores.' 
+      res.status(403).json({
+        error: 'Registro bloqueado.',
+        details: isFirstRun ? 'Erro interno de configuração.' : 'O banco já possui usuários. Informe o adminSecret para criar novos administradores.',
       });
+      return;
     }
 
     const existing = await prisma.user.findUnique({ where: { email: data.email } });
-    if (existing) return res.status(409).json({ error: 'E-mail já registrado.' });
+    if (existing) {
+      res.status(409).json({ error: 'E-mail já registrado.' });
+      return;
+    }
 
     const org = await prisma.organization.upsert({
       where:  { slug: data.orgSlug },
-      create: { 
-        name: data.orgName, 
+      create: {
+        name: data.orgName,
         slug: data.orgSlug,
-        monthlyQuota: 50000 // quota inicial p/ nova org
+        monthlyQuota: 50000,
       },
       update: {},
     });
 
     const hash = await bcrypt.hash(data.password, 12);
     const user = await prisma.user.create({
-      data: { 
-        organizationId: org.id, 
-        email: data.email, 
-        passwordHash: hash, 
-        name: data.name, 
-        role: 'ADMIN' 
+      data: {
+        organizationId: org.id,
+        email: data.email,
+        passwordHash: hash,
+        name: data.name,
+        role: 'ADMIN',
       },
     });
 
@@ -223,14 +230,14 @@ router.post('/register', async (req, res, next) => {
     const { refreshToken } = await createRefreshToken(user.id);
 
     logger.info({ event: 'auth.register_ok', userId: user.id, orgId: org.id, isFirstRun });
-    res.status(201).json({ 
-      token, 
-      expiresAt, 
-      refreshToken, 
-      userId: user.id, 
-      orgId: org.id 
+    res.status(201).json({
+      token,
+      expiresAt,
+      refreshToken,
+      userId: user.id,
+      orgId:  org.id,
     });
   } catch (err) { next(err); }
 });
 
-module.exports = router;
+export default router;

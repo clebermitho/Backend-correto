@@ -1,9 +1,11 @@
-const router = require('express').Router();
-const { z }  = require('zod');
-const { prisma }      = require('../utils/prisma');
-const { requireAuth } = require('../middleware/auth');
-const { log }         = require('../utils/audit');
-const logger          = require('../utils/logger');
+import { Router, Request, Response, NextFunction } from 'express';
+import { z } from 'zod';
+import { prisma } from '../utils/prisma';
+import { requireAuth } from '../middleware/auth';
+import { log } from '../utils/audit';
+import logger from '../utils/logger';
+
+const router = Router();
 
 const feedbackSchema = z.object({
   suggestionId: z.string().min(1),
@@ -12,41 +14,36 @@ const feedbackSchema = z.object({
 });
 
 // ── POST /api/feedback ───────────────────────────────────────
-router.post('/', requireAuth, async (req, res, next) => {
+router.post('/', requireAuth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const data = feedbackSchema.parse(req.body);
 
-    // Guard: organizationId obrigatório
     if (!req.organizationId) {
-      return res.status(400).json({ error: 'Usuário sem organização associada.' });
+      res.status(400).json({ error: 'Usuário sem organização associada.' });
+      return;
     }
 
-    // Garante que a sugestão pertence à org (evita cross-org)
     const suggestion = await prisma.suggestion.findFirst({
       where: { id: data.suggestionId, organizationId: req.organizationId },
     });
     if (!suggestion) {
-      // Sugestão não encontrada — pode ter sido deletada ou ser de sessão anterior
-      // Retornar 200 (ignorado) para evitar cascata de erros na extensão
-      logger.warn({ event: 'feedback.suggestion_not_found', suggestionId: data.suggestionId, userId: req.user.id });
-      return res.status(200).json({ ignored: true, reason: 'suggestion_not_found' });
+      logger.warn({ event: 'feedback.suggestion_not_found', suggestionId: data.suggestionId, userId: req.user!.id });
+      res.status(200).json({ ignored: true, reason: 'suggestion_not_found' });
+      return;
     }
 
-    // Previne feedback duplicado do mesmo usuário para o mesmo tipo (idempotente)
     const existing = await prisma.suggestionFeedback.findFirst({
-      where: { suggestionId: data.suggestionId, userId: req.user.id, type: data.type },
+      where: { suggestionId: data.suggestionId, userId: req.user!.id, type: data.type },
     });
     if (existing) {
-      return res.status(200).json(existing); // idempotente
+      res.status(200).json(existing);
+      return;
     }
 
     const feedback = await prisma.suggestionFeedback.create({
-      data: { ...data, userId: req.user.id },
+      data: { ...data, userId: req.user!.id },
     });
 
-    // Recalcular score (a sugestão já foi validada como desta org no findFirst acima)
-    // Filtramos apenas por suggestionId — o filtro de org via relação pode causar erros no Prisma 5
-    // USADO (USED) e APROVADO (APPROVED) contam como positivo
     const [approvedCount, totalCount] = await Promise.all([
       prisma.suggestionFeedback.count({
         where: {
@@ -57,7 +54,6 @@ router.post('/', requireAuth, async (req, res, next) => {
       prisma.suggestionFeedback.count({
         where: {
           suggestionId: data.suggestionId,
-          // IGNORED não entra no cálculo de score (neutro)
           type: { in: ['APPROVED', 'USED', 'REJECTED'] },
         },
       }),
@@ -85,7 +81,6 @@ router.post('/', requireAuth, async (req, res, next) => {
       ? Number(settings['suggestion.minApprovalScoreToLearn'])
       : 0.8;
 
-    // Promover para template se score >= minApprovalScoreToLearn e usageCount >= 3 (aprendizado automático)
     const updatedSuggestion = await prisma.suggestion.findUnique({
       where: { id: data.suggestionId },
     });
@@ -95,7 +90,6 @@ router.post('/', requireAuth, async (req, res, next) => {
       updatedSuggestion.score >= minApprovalScoreToLearn &&
       updatedSuggestion.usageCount >= 3
     ) {
-      // Verifica se já existe template idêntico
       const existingTemplate = await prisma.template.findFirst({
         where: { organizationId: req.organizationId, text: updatedSuggestion.text },
       });
@@ -108,7 +102,7 @@ router.post('/', requireAuth, async (req, res, next) => {
             score:          updatedSuggestion.score,
             usageCount:     updatedSuggestion.usageCount,
           },
-        }).catch(() => {}); // não bloquear se falhar
+        }).catch(() => {});
         logger.info({
           event:        'template.auto_learned',
           suggestionId: data.suggestionId,
@@ -120,14 +114,14 @@ router.post('/', requireAuth, async (req, res, next) => {
 
     log({
       organizationId: req.organizationId,
-      userId:         req.user.id,
+      userId:         req.user!.id,
       eventType:      `suggestion.${data.type.toLowerCase()}`,
       payload:        { suggestionId: data.suggestionId, reason: data.reason },
     });
 
     logger.info({
       event:        `feedback.${data.type.toLowerCase()}`,
-      userId:       req.user.id,
+      userId:       req.user!.id,
       suggestionId: data.suggestionId,
       newScore,
     });
@@ -137,16 +131,15 @@ router.post('/', requireAuth, async (req, res, next) => {
 });
 
 // ── GET /api/feedback/rejected — sugestões reprovadas da org ─
-// ATENÇÃO: retorna campo "rejected" (não "feedback") — alinhado com o admin e a extensão
-router.get('/rejected', requireAuth, async (req, res, next) => {
+router.get('/rejected', requireAuth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const limit = Math.min(parseInt(req.query.limit) || 100, 500);
-    const since = req.query.since ? new Date(req.query.since) : null;
+    const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
+    const since = req.query.since ? new Date(req.query.since as string) : null;
 
     const rejected = await prisma.suggestionFeedback.findMany({
       where: {
         type: 'REJECTED',
-        user: { organizationId: req.organizationId },
+        user: { organizationId: req.organizationId! },
         ...(since ? { createdAt: { gte: since } } : {}),
       },
       include: {
@@ -161,4 +154,4 @@ router.get('/rejected', requireAuth, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-module.exports = router;
+export default router;

@@ -1,8 +1,10 @@
-const router = require('express').Router();
-const { z }  = require('zod');
-const { prisma }       = require('../utils/prisma');
-const { requireAuth }  = require('../middleware/auth');
-const { requireRole }  = require('../middleware/auth');
+import { Router, Request, Response, NextFunction } from 'express';
+import { z } from 'zod';
+import { Prisma } from '@prisma/client';
+import { prisma } from '../utils/prisma';
+import { requireAuth, requireRole } from '../middleware/auth';
+
+const router = Router();
 
 const eventSchema = z.object({
   eventType: z.string().min(3).max(100),
@@ -10,21 +12,21 @@ const eventSchema = z.object({
 });
 
 // ── POST /api/events — extensão registra eventos ─────────────
-router.post('/', requireAuth, async (req, res, next) => {
+router.post('/', requireAuth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const { eventType, payload } = eventSchema.parse(req.body);
 
-    // Guard: organizationId é obrigatório no banco
     if (!req.organizationId) {
-      return res.status(400).json({ error: 'Usuário sem organização associada.' });
+      res.status(400).json({ error: 'Usuário sem organização associada.' });
+      return;
     }
 
     const event = await prisma.usageEvent.create({
       data: {
         organizationId: req.organizationId,
-        userId:         req.user.id,
+        userId:         req.user!.id,
         eventType,
-        payload,
+        payload:        payload as Prisma.InputJsonValue,
         ipAddress: req.ip,
         userAgent: req.headers['user-agent'],
       },
@@ -35,16 +37,16 @@ router.post('/', requireAuth, async (req, res, next) => {
 });
 
 // ── GET /api/events — listar eventos com filtros ─────────────
-router.get('/', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (req, res, next) => {
+router.get('/', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const limit      = Math.min(parseInt(req.query.limit) || 50, 200);
-    const eventType  = req.query.eventType;
-    const userId     = req.query.userId;
-    const since      = req.query.since ? new Date(req.query.since) : undefined;
+    const limit      = Math.min(parseInt(req.query.limit as string) || 50, 200);
+    const eventType  = req.query.eventType as string | undefined;
+    const userId     = req.query.userId as string | undefined;
+    const since      = req.query.since ? new Date(req.query.since as string) : undefined;
 
     const events = await prisma.usageEvent.findMany({
       where: {
-        organizationId: req.organizationId,
+        organizationId: req.organizationId!,
         ...(eventType ? { eventType }      : {}),
         ...(userId    ? { userId }         : {}),
         ...(since     ? { createdAt: { gte: since } } : {}),
@@ -62,11 +64,10 @@ router.get('/', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (req, re
 });
 
 // ── GET /api/events/recent — visão rápida para dashboard admin
-// Retorna os 20 eventos mais recentes agrupados por tipo de erro/problema
-router.get('/recent', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (req, res, next) => {
+router.get('/recent', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const limit  = Math.min(parseInt(req.query.limit) || 20, 100);
-    const filter = req.query.filter; // 'errors' | 'ai' | 'auth' | undefined
+    const limit  = Math.min(parseInt(req.query.limit as string) || 20, 100);
+    const filter = req.query.filter as string | undefined;
 
     const typeFilter = (() => {
       if (filter === 'errors') return { startsWith: 'error.' };
@@ -77,7 +78,7 @@ router.get('/recent', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (r
 
     const events = await prisma.usageEvent.findMany({
       where: {
-        organizationId: req.organizationId,
+        organizationId: req.organizationId!,
         ...(typeFilter ? { eventType: typeFilter } : {}),
       },
       orderBy: { createdAt: 'desc' },
@@ -88,11 +89,10 @@ router.get('/recent', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (r
       },
     });
 
-    // Contagem de tipos nas últimas 24h
     const since24h = new Date(Date.now() - 24 * 3600 * 1000);
     const summary  = await prisma.usageEvent.groupBy({
       by:      ['eventType'],
-      where:   { organizationId: req.organizationId, createdAt: { gte: since24h } },
+      where:   { organizationId: req.organizationId!, createdAt: { gte: since24h } },
       _count:  { eventType: true },
       orderBy: { _count: { eventType: 'desc' } },
       take:    15,
@@ -105,4 +105,4 @@ router.get('/recent', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (r
   } catch (err) { next(err); }
 });
 
-module.exports = router;
+export default router;

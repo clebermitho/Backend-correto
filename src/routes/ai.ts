@@ -1,12 +1,14 @@
-const router = require('express').Router();
-const { z }  = require('zod');
-const { requireAuth }            = require('../middleware/auth');
-const { generateSuggestions, generateChatReply } = require('../services/openai');
-const { prisma }                 = require('../utils/prisma');
-const { log }                    = require('../utils/audit');
-const logger                     = require('../utils/logger');
+import { Router, Request, Response, NextFunction } from 'express';
+import { z } from 'zod';
+import { requireAuth } from '../middleware/auth';
+import { generateSuggestions, generateChatReply } from '../services/openai';
+import { prisma } from '../utils/prisma';
+import { log } from '../utils/audit';
+import logger from '../utils/logger';
 
-function normalizeModel(value) {
+const router = Router();
+
+function normalizeModel(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const s = value.trim().replace(/^["']|["']$/g, '').trim();
   if (!s) return undefined;
@@ -15,21 +17,18 @@ function normalizeModel(value) {
 }
 
 // ── Auxiliar: Verificar limite diário do usuário ─────────────
-async function checkDailyLimit(userId, organizationId, type) {
-  // type: 'chat' | 'suggestions'
-  const eventType = type === 'chat' ? 'ai.chat_message' : 'ai.suggestions_generated';
+async function checkDailyLimit(userId: string, organizationId: string, type: 'chat' | 'suggestions'): Promise<void> {
+  const eventType  = type === 'chat' ? 'ai.chat_message' : 'ai.suggestions_generated';
   const limitField = type === 'chat' ? 'dailyChatLimit' : 'dailySuggestionLimit';
   const settingKey = type === 'chat' ? 'limits.chatMessagesPerUserPerDay' : 'limits.suggestionsPerUserPerDay';
 
-  // Buscar limite individual do usuário
   const user = await prisma.user.findUnique({
     where: { id: userId },
     select: { [limitField]: true },
   });
 
-  let limit = user?.[limitField]; // null = usar global; 0 = ilimitado; N = limite
+  let limit: number | null | undefined = (user as Record<string, unknown>)?.[limitField] as number | null | undefined;
 
-  // Se null, buscar limite global da org via Settings
   if (limit === null || limit === undefined) {
     const setting = await prisma.setting.findUnique({
       where: { organizationId_key: { organizationId, key: settingKey } },
@@ -39,10 +38,8 @@ async function checkDailyLimit(userId, organizationId, type) {
     limit = (globalVal !== undefined && globalVal !== null) ? Number(globalVal) : null;
   }
 
-  // 0 ou null (sem configuração) = ilimitado
   if (!limit) return;
 
-  // Contar eventos de hoje
   const startOfDay = new Date();
   startOfDay.setHours(0, 0, 0, 0);
 
@@ -56,43 +53,43 @@ async function checkDailyLimit(userId, organizationId, type) {
 
   if (count >= limit) {
     const label = type === 'chat' ? 'mensagens de chat' : 'solicitações de sugestões';
-    const err = new Error(`Limite diário de ${label} atingido (${count}/${limit}). Tente novamente amanhã.`);
+    const err = new Error(`Limite diário de ${label} atingido (${count}/${limit}). Tente novamente amanhã.`) as Error & { statusCode: number };
     err.statusCode = 429;
     throw err;
   }
 }
 
 // ── Auxiliar: Verificar e descontar quota ────────────────────
-async function checkQuota(orgId) {
+async function checkQuota(orgId: string): Promise<{ monthlyQuota: number; usedTokens: number; name: string }> {
   const org = await prisma.organization.findUnique({
     where: { id: orgId },
-    select: { monthlyQuota: true, usedTokens: true, name: true }
+    select: { monthlyQuota: true, usedTokens: true, name: true },
   });
 
   if (!org) throw new Error('Organização não encontrada.');
-  
+
   if (org.usedTokens >= org.monthlyQuota) {
     logger.warn({ event: 'ai.quota_exceeded', orgId, orgName: org.name });
-    const err = new Error('Cota mensal de IA excedida para sua organização.');
+    const err = new Error('Cota mensal de IA excedida para sua organização.') as Error & { statusCode: number };
     err.statusCode = 403;
     throw err;
   }
   return org;
 }
 
-async function updateQuota(orgId, tokens) {
+async function updateQuota(orgId: string, tokens: number): Promise<void> {
   await prisma.organization.update({
     where: { id: orgId },
-    data: { usedTokens: { increment: tokens } }
+    data: { usedTokens: { increment: tokens } },
   });
 }
 
 // POST /api/ai/suggestions — extensão envia contexto, recebe 3 sugestões
-router.post('/suggestions', requireAuth, async (req, res, next) => {
+router.post('/suggestions', requireAuth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
-    await checkQuota(req.organizationId);
-    await checkDailyLimit(req.user.id, req.organizationId, 'suggestions');
-    
+    await checkQuota(req.organizationId!);
+    await checkDailyLimit(req.user!.id, req.organizationId!, 'suggestions');
+
     const schema = z.object({
       context:       z.string().min(1),
       question:      z.string().min(1),
@@ -104,7 +101,7 @@ router.post('/suggestions', requireAuth, async (req, res, next) => {
     const data = schema.parse(req.body);
 
     const settingsRows = await prisma.setting.findMany({
-      where:  { organizationId: req.organizationId },
+      where:  { organizationId: req.organizationId! },
       select: { key: true, value: true },
     });
     const settings = Object.fromEntries(settingsRows.map(r => [r.key, r.value]));
@@ -119,7 +116,7 @@ router.post('/suggestions', requireAuth, async (req, res, next) => {
     const rawModel = settings['suggestion.model'];
     const model = normalizeModel(rawModel);
     if (typeof rawModel === 'string' && !model) {
-      logger.warn({ event: 'ai.invalid_model_setting', orgId: req.organizationId, rawModel: rawModel.slice(0, 80) });
+      logger.warn({ event: 'ai.invalid_model_setting', orgId: req.organizationId, rawModel: (rawModel as string).slice(0, 80) });
     }
 
     const temperature = settings['suggestion.temperature'] !== undefined
@@ -131,19 +128,18 @@ router.post('/suggestions', requireAuth, async (req, res, next) => {
       : 500;
 
     const promptTemplate = typeof settings['prompt.suggestions'] === 'string'
-      ? settings['prompt.suggestions']
+      ? settings['prompt.suggestions'] as string
       : '';
 
-    // Buscar bases de conhecimento ativas da org
     const kbs = await prisma.knowledgeBase.findMany({
-      where: { organizationId: req.organizationId, isActive: true },
+      where: { organizationId: req.organizationId!, isActive: true },
     });
     const knowledgeBases = Object.fromEntries(kbs.map(kb => [kb.name, kb.content]));
 
     const topExamples = learnFromApproved
       ? (await prisma.template.findMany({
           where: {
-            organizationId: req.organizationId,
+            organizationId: req.organizationId!,
             isActive: true,
             category: data.category,
           },
@@ -157,7 +153,7 @@ router.post('/suggestions', requireAuth, async (req, res, next) => {
       ? (await prisma.suggestionFeedback.findMany({
           where: {
             type: 'REJECTED',
-            suggestion: { organizationId: req.organizationId, category: data.category },
+            suggestion: { organizationId: req.organizationId!, category: data.category },
           },
           select: { suggestion: { select: { text: true } } },
           orderBy: { createdAt: 'desc' },
@@ -175,30 +171,28 @@ router.post('/suggestions', requireAuth, async (req, res, next) => {
       ...data,
       topExamples,
       avoidPatterns,
-      knowledgeBases,
+      knowledgeBases: knowledgeBases as Record<string, unknown>,
       promptTemplate,
       model,
       temperature,
       maxTokens,
     });
 
-    // Atualizar quota
     if (result.tokensUsed) {
-      await updateQuota(req.organizationId, result.tokensUsed);
+      await updateQuota(req.organizationId!, result.tokensUsed);
     }
 
-    // Salvar no banco automaticamente
     const saved = await prisma.$transaction(
       result.suggestions.map(text =>
         prisma.suggestion.create({
-          data: { organizationId: req.organizationId, category: data.category, text, source: 'AI' },
+          data: { organizationId: req.organizationId!, category: data.category, text, source: 'AI' },
         })
       )
     );
 
     log({
-      organizationId: req.organizationId,
-      userId:         req.user.id,
+      organizationId: req.organizationId!,
+      userId:         req.user!.id,
       eventType:      'ai.suggestions_generated',
       payload: {
         category:   data.category,
@@ -214,17 +208,18 @@ router.post('/suggestions', requireAuth, async (req, res, next) => {
       latencyMs:   result.latencyMs,
       tokensUsed:  result.tokensUsed,
     });
-  } catch (err) { 
-    if (err.statusCode) return res.status(err.statusCode).json({ error: err.message });
-    next(err); 
+  } catch (err) {
+    const e = err as Record<string, unknown>;
+    if (e.statusCode) { res.status(e.statusCode as number).json({ error: e.message }); return; }
+    next(err);
   }
 });
 
 // POST /api/ai/chat — chat livre com a IA (bases + system prompt)
-router.post('/chat', requireAuth, async (req, res, next) => {
+router.post('/chat', requireAuth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
-    await checkQuota(req.organizationId);
-    await checkDailyLimit(req.user.id, req.organizationId, 'chat');
+    await checkQuota(req.organizationId!);
+    await checkDailyLimit(req.user!.id, req.organizationId!, 'chat');
 
     const schema = z.object({
       message:      z.string().min(1),
@@ -233,8 +228,8 @@ router.post('/chat', requireAuth, async (req, res, next) => {
         content: z.string(),
       })).default([]),
       knowledge:    z.object({
-        coren:   z.any().optional(),
-        sistema: z.any().optional(),
+        coren:   z.unknown().optional(),
+        sistema: z.unknown().optional(),
       }).optional().default({}),
       systemPrompt: z.string().default(''),
     });
@@ -242,7 +237,7 @@ router.post('/chat', requireAuth, async (req, res, next) => {
     const { message, history } = schema.parse(req.body);
 
     const settingsRows = await prisma.setting.findMany({
-      where:  { organizationId: req.organizationId },
+      where:  { organizationId: req.organizationId! },
       select: { key: true, value: true },
     });
     const settings = Object.fromEntries(settingsRows.map(r => [r.key, r.value]));
@@ -250,7 +245,7 @@ router.post('/chat', requireAuth, async (req, res, next) => {
     const rawModel = settings['suggestion.model'];
     const model = normalizeModel(rawModel);
     if (typeof rawModel === 'string' && !model) {
-      logger.warn({ event: 'ai.invalid_model_setting', orgId: req.organizationId, rawModel: rawModel.slice(0, 80) });
+      logger.warn({ event: 'ai.invalid_model_setting', orgId: req.organizationId, rawModel: (rawModel as string).slice(0, 80) });
     }
 
     const temperature = settings['suggestion.temperature'] !== undefined
@@ -261,13 +256,12 @@ router.post('/chat', requireAuth, async (req, res, next) => {
       ? Number(settings['suggestion.maxTokens'])
       : 600;
 
-    const systemPromptTemplate = typeof settings['prompt.chat'] === 'string' && settings['prompt.chat'].trim().length > 0
-      ? settings['prompt.chat']
+    const systemPromptTemplate = typeof settings['prompt.chat'] === 'string' && (settings['prompt.chat'] as string).trim().length > 0
+      ? settings['prompt.chat'] as string
       : '';
 
-    // Buscar bases de conhecimento salvas no banco
     const kbs = await prisma.knowledgeBase.findMany({
-      where: { organizationId: req.organizationId, isActive: true },
+      where: { organizationId: req.organizationId!, isActive: true },
     });
     const dbKnowledgeBases = Object.fromEntries(kbs.map(kb => [kb.name, kb.content]));
 
@@ -275,30 +269,30 @@ router.post('/chat', requireAuth, async (req, res, next) => {
       message,
       history,
       systemPromptTemplate,
-      dbKnowledgeBases,
+      dbKnowledgeBases: dbKnowledgeBases as Record<string, unknown>,
       model,
       temperature,
       maxTokens,
     });
 
-    // Atualizar quota
     if (result.tokensUsed) {
-      await updateQuota(req.organizationId, result.tokensUsed);
+      await updateQuota(req.organizationId!, result.tokensUsed);
     }
 
     log({
-      organizationId: req.organizationId,
-      userId:         req.user.id,
+      organizationId: req.organizationId!,
+      userId:         req.user!.id,
       eventType:      'ai.chat_message',
       payload: { latencyMs: result.latencyMs, tokensUsed: result.tokensUsed },
       req,
     });
 
     res.json({ reply: result.reply, latencyMs: result.latencyMs });
-  } catch (err) { 
-    if (err.statusCode) return res.status(err.statusCode).json({ error: err.message });
-    next(err); 
+  } catch (err) {
+    const e = err as Record<string, unknown>;
+    if (e.statusCode) { res.status(e.statusCode as number).json({ error: e.message }); return; }
+    next(err);
   }
 });
 
-module.exports = router;
+export default router;
