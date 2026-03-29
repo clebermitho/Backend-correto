@@ -26,6 +26,7 @@ import templatesRouter from './routes/templates';
 import usersRouter from './routes/users';
 import knowledgeBasesRouter from './routes/knowledgeBases';
 import quotaRouter from './routes/quota';
+import analyticsRouter from './routes/analytics';
 
 const app = express();
 
@@ -82,6 +83,7 @@ app.use('/api/templates',       templatesRouter);
 app.use('/api/users',           usersRouter);
 app.use('/api/knowledge-bases', knowledgeBasesRouter);
 app.use('/api/quota',           quotaRouter);
+app.use('/api/analytics',       analyticsRouter);
 
 // ── Health check robusto ─────────────────────────────────────
 app.get('/health', async (req: Request, res: Response) => {

@@ -1,8 +1,12 @@
 import jwt from 'jsonwebtoken';
 import { prisma } from './prisma';
+import logger from './logger';
 
+// 120h = 5 days — controlled via JWT_TTL_HOURS env var
 const ACCESS_TTL_HOURS  = parseInt(process.env.JWT_TTL_HOURS    || '120');
 const REFRESH_TTL_DAYS  = parseInt(process.env.JWT_REFRESH_DAYS || '30');
+
+logger.info({ event: 'startup.jwt_config', accessTtlHours: ACCESS_TTL_HOURS, refreshTtlDays: REFRESH_TTL_DAYS });
 
 // ── Access Token (sessão curta) ──────────────────────────────
 export async function createSession(userId: string): Promise<{ token: string; expiresAt: Date }> {
