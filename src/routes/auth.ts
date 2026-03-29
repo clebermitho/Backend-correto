@@ -140,6 +140,17 @@ router.post('/logout', requireAuth, async (req: Request, res: Response, next: Ne
   } catch (err) { next(err); }
 });
 
+// ── POST /api/auth/heartbeat — lightweight lastSeenAt update ──
+router.post('/heartbeat', requireAuth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    await prisma.user.update({
+      where: { id: req.user!.id },
+      data: { lastSeenAt: new Date() },
+    });
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
 // ── GET /api/auth/me ─────────────────────────────────────────
 router.get('/me', requireAuth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {

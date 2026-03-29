@@ -14,14 +14,16 @@ const USER_SELECT = {
   dailyChatLimit: true, dailySuggestionLimit: true,
 };
 
-// ── Auxiliar: verificar se usuário tem sessão ativa ──────────
+const ONLINE_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
+
+// ── Auxiliar: verificar se usuário esteve ativo recentemente ──
 async function isUserOnline(userId: string): Promise<boolean> {
-  const now = new Date();
-  const active = await prisma.session.findFirst({
-    where: { userId, isRevoked: false, expiresAt: { gt: now } },
+  const threshold = new Date(Date.now() - ONLINE_THRESHOLD_MS);
+  const user = await prisma.user.findFirst({
+    where: { id: userId, lastSeenAt: { gte: threshold } },
     select: { id: true },
   });
-  return !!active;
+  return !!user;
 }
 
 // ── Auxiliar: obter limite efetivo do usuário ────────────────
@@ -57,14 +59,13 @@ router.get('/', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (req: Re
       orderBy: { createdAt: 'desc' },
     });
 
-    const now = new Date();
     const userIds = users.map(u => u.id);
-    const activeSessions = await prisma.session.findMany({
-      where: { userId: { in: userIds }, isRevoked: false, expiresAt: { gt: now } },
-      select: { userId: true },
-      distinct: ['userId'],
+    const threshold = new Date(Date.now() - ONLINE_THRESHOLD_MS);
+    const onlineUsers = await prisma.user.findMany({
+      where: { id: { in: userIds }, lastSeenAt: { gte: threshold } },
+      select: { id: true },
     });
-    const onlineSet = new Set(activeSessions.map(s => s.userId));
+    const onlineSet = new Set(onlineUsers.map(u => u.id));
 
     const enriched = users.map(u => ({ ...u, isOnline: onlineSet.has(u.id) }));
     res.json({ users: enriched });
