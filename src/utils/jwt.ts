@@ -1,7 +1,7 @@
 import jwt from 'jsonwebtoken';
 import { prisma } from './prisma';
 
-const ACCESS_TTL_HOURS  = parseInt(process.env.JWT_TTL_HOURS    || '8');
+const ACCESS_TTL_HOURS  = parseInt(process.env.JWT_TTL_HOURS    || '120');
 const REFRESH_TTL_DAYS  = parseInt(process.env.JWT_REFRESH_DAYS || '30');
 
 // ── Access Token (sessão curta) ──────────────────────────────
