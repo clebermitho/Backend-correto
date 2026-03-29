@@ -58,7 +58,7 @@ async function main() {
     { key: 'limits.maxActiveSessions',             value: 3 },
 
     // ── Sessão e segurança ────────────────────────────
-    { key: 'auth.sessionDurationHours',            value: 8 },
+    { key: 'auth.sessionDurationHours',            value: 120 },
     { key: 'auth.maxLoginAttempts',                value: 10 },
     { key: 'auth.requireStrongPassword',           value: false },
 
