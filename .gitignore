@@ -32,3 +32,4 @@ coverage/
 *.js.map
 *.d.ts
 !jest.config.js
+!src/types/*.d.ts
