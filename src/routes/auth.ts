@@ -10,7 +10,8 @@ import logger from '../utils/logger';
 const router = Router();
 
 const loginSchema = z.object({
-  email:    z.string().email('E-mail inválido.'),
+  email:    z.string().email('E-mail inválido.').optional(),
+  username: z.string().min(1).optional(),
   password: z.string().min(1, 'Senha obrigatória.'),
 });
 
@@ -45,23 +46,27 @@ const loginSchema = z.object({
  */
 router.post('/login', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const { email, password } = loginSchema.parse(req.body);
+    const { email, username, password } = loginSchema.parse(req.body);
 
-    const user = await prisma.user.findUnique({
-      where:   { email: email.toLowerCase().trim() },
-      include: { organization: true },
-    });
+    if (!email && !username) {
+      res.status(400).json({ error: 'Informe e-mail ou username.' });
+      return;
+    }
+
+    const user = email
+      ? await prisma.user.findUnique({ where: { email: email.toLowerCase().trim() }, include: { organization: true } })
+      : await prisma.user.findUnique({ where: { username: username!.trim() }, include: { organization: true } });
 
     // Resposta genérica intencional (sem revelar se o e-mail existe)
     if (!user || !user.isActive) {
-      logger.warn({ event: 'auth.login_failed', email, reason: user ? 'inactive' : 'not_found', ip: req.ip });
+      logger.warn({ event: 'auth.login_failed', email, username, reason: user ? 'inactive' : 'not_found', ip: req.ip });
       res.status(401).json({ error: 'Credenciais inválidas.' });
       return;
     }
 
     const valid = await bcrypt.compare(password, user.passwordHash);
     if (!valid) {
-      logger.warn({ event: 'auth.login_failed', email, reason: 'wrong_password', ip: req.ip });
+      logger.warn({ event: 'auth.login_failed', email, username, reason: 'wrong_password', ip: req.ip });
       res.status(401).json({ error: 'Credenciais inválidas.' });
       return;
     }
@@ -78,7 +83,7 @@ router.post('/login', async (req: Request, res: Response, next: NextFunction): P
     prisma.user.update({ where: { id: user.id }, data: { lastSeenAt: new Date() } }).catch(() => {});
 
     log({ organizationId: user.organizationId, userId: user.id, eventType: 'auth.login', req });
-    logger.info({ event: 'auth.login_ok', userId: user.id, email, ip: req.ip });
+    logger.info({ event: 'auth.login_ok', userId: user.id, email, username, ip: req.ip });
 
     res.json({
       token,
@@ -175,7 +180,8 @@ router.post('/register', async (req: Request, res: Response, next: NextFunction)
     const schema = z.object({
       name:        z.string().min(2),
       email:       z.string().email(),
-      password:    z.string().min(8, 'Mínimo 8 caracteres.'),
+      username:    z.string().min(1).optional(),
+      password:    z.string().min(6, 'Mínimo 6 caracteres.'),
       orgName:     z.string().min(2),
       orgSlug:     z.string().min(2).regex(/^[a-z0-9-]+$/, 'Apenas letras minúsculas, números e hífens.'),
       adminSecret: z.string().optional(),
@@ -220,6 +226,7 @@ router.post('/register', async (req: Request, res: Response, next: NextFunction)
       data: {
         organizationId: org.id,
         email: data.email,
+        username: data.username ?? null,
         passwordHash: hash,
         name: data.name,
         role: 'ADMIN',

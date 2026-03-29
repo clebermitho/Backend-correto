@@ -9,7 +9,7 @@ import logger from '../utils/logger';
 const router = Router();
 
 const USER_SELECT = {
-  id: true, name: true, email: true, role: true,
+  id: true, name: true, email: true, username: true, role: true,
   isActive: true, lastSeenAt: true, createdAt: true,
   dailyChatLimit: true, dailySuggestionLimit: true,
 };
@@ -127,19 +127,28 @@ router.post('/', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (req: R
   try {
     const data = z.object({
       name:     z.string().min(2, 'Nome muito curto.'),
-      email:    z.string().email('E-mail inválido.'),
-      password: z.string().min(8, 'Mínimo 8 caracteres.'),
+      email:    z.string().email('E-mail inválido.').optional(),
+      username: z.string().min(1, 'Username muito curto.').optional(),
+      password: z.string().min(6, 'Mínimo 6 caracteres.'),
       role:     z.enum(['AGENT', 'ADMIN']).default('AGENT'),
-    }).parse(req.body);
+    }).refine(d => d.email || d.username, { message: 'Informe e-mail ou username.' })
+      .parse(req.body);
 
-    const exists = await prisma.user.findUnique({ where: { email: data.email.toLowerCase().trim() } });
-    if (exists) { res.status(409).json({ error: 'E-mail já registrado.' }); return; }
+    if (data.email) {
+      const emailExists = await prisma.user.findUnique({ where: { email: data.email.toLowerCase().trim() } });
+      if (emailExists) { res.status(409).json({ error: 'E-mail já registrado.' }); return; }
+    }
+    if (data.username) {
+      const usernameExists = await prisma.user.findUnique({ where: { username: data.username.trim() } });
+      if (usernameExists) { res.status(409).json({ error: 'Username já registrado.' }); return; }
+    }
 
     const hash = await bcrypt.hash(data.password, 12);
     const user = await prisma.user.create({
       data: {
         organizationId: req.organizationId!,
-        email:          data.email.toLowerCase().trim(),
+        email:          data.email ? data.email.toLowerCase().trim() : null,
+        username:       data.username ? data.username.trim() : null,
         passwordHash:   hash,
         name:           data.name,
         role:           data.role,
@@ -198,7 +207,7 @@ router.patch('/:id', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (re
 router.post('/:id/reset-password', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const { newPassword } = z.object({
-      newPassword: z.string().min(8, 'Mínimo 8 caracteres.'),
+      newPassword: z.string().min(6, 'Mínimo 6 caracteres.'),
     }).parse(req.body);
 
     const existing = await prisma.user.findFirst({
