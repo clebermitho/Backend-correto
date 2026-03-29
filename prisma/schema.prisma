@@ -41,7 +41,8 @@ model Organization {
 model User {
   id             String   @id @default(cuid())
   organizationId String
-  email          String   @unique
+  email          String?  @unique
+  username       String?  @unique
   passwordHash   String
   name           String
   role           UserRole @default(AGENT)   // AGENT | ADMIN | SUPER_ADMIN
