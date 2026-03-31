@@ -13,7 +13,8 @@ const router = Router();
 async function processEmbedding(content: unknown): Promise<number[] | null> {
   try {
     const text = typeof content === 'string' ? content : JSON.stringify(content);
-    return await generateEmbedding(text);
+    const result = await generateEmbedding(text);
+    return result.embedding;
   } catch (err) {
     logger.error({ event: 'kb.embedding_failed', err: (err as Error).message });
     return null;

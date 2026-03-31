@@ -128,6 +128,13 @@ async function callOpenAI({
   }, { label: 'openai.call' });
 }
 
+interface TokenDetails {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  cachedTokens: number;
+}
+
 // ── generateSuggestions ──────────────────────────────────────
 async function generateSuggestions({
   context,
@@ -145,6 +152,7 @@ async function generateSuggestions({
   latencyMs: number;
   model: string;
   tokensUsed: number | undefined;
+  tokenDetails: TokenDetails;
 }> {
   const kb = Object.fromEntries(
     Object.entries(knowledgeBases || {}).map(([k, v]) => [String(k).toLowerCase().trim(), v])
@@ -218,7 +226,12 @@ NÃO use numeração nem prefixos como "Resposta 1:".`;
   const latencyMs = Date.now() - start;
   const choices = data.choices as Array<{ message: { content: string } }>;
   const text = choices[0].message.content;
-  const usage = data.usage as { total_tokens?: number } | undefined;
+  const usage = data.usage as {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+    prompt_tokens_details?: { cached_tokens?: number };
+  } | undefined;
 
   const suggestions = text
     .split(/\n\s*\n/)
@@ -245,11 +258,17 @@ NÃO use numeração nem prefixos como "Resposta 1:".`;
     latencyMs,
     model:      data.model as string,
     tokensUsed: usage?.total_tokens,
+    tokenDetails: {
+      promptTokens:     usage?.prompt_tokens ?? 0,
+      completionTokens: usage?.completion_tokens ?? 0,
+      totalTokens:      usage?.total_tokens ?? 0,
+      cachedTokens:     usage?.prompt_tokens_details?.cached_tokens ?? 0,
+    },
   };
 }
 
 // ── generateEmbedding — gera vetor para RAG ─────────────────
-async function generateEmbedding(text: string): Promise<number[]> {
+async function generateEmbedding(text: string): Promise<{ embedding: number[]; tokensUsed: number }> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error('OpenAI API Key não configurada.');
 
@@ -271,8 +290,11 @@ async function generateEmbedding(text: string): Promise<number[]> {
     throw new Error((errObj?.message as string) || `OpenAI Embedding HTTP ${res.status}`);
   }
 
-  const data = await res.json() as { data: Array<{ embedding: number[] }> };
-  return data.data[0].embedding;
+  const data = await res.json() as { data: Array<{ embedding: number[] }>; usage?: { total_tokens?: number } };
+  return {
+    embedding: data.data[0].embedding,
+    tokensUsed: data.usage?.total_tokens ?? 0,
+  };
 }
 
 // ── generateChatReply ────────────────────────────────────────
@@ -287,7 +309,9 @@ async function generateChatReply({
 }: GenerateChatReplyOptions): Promise<{
   reply: string;
   latencyMs: number;
+  model: string;
   tokensUsed: number | undefined;
+  tokenDetails: TokenDetails;
 }> {
   const kb = Object.fromEntries(
     Object.entries(dbKnowledgeBases || {}).map(([k, v]) => [String(k).toLowerCase().trim(), v])
@@ -349,7 +373,12 @@ IMPORTANTE: Responda de forma natural, clara e útil. Use emojis quando apropria
   const latencyMs = Date.now() - start;
 
   const choices = data.choices as Array<{ message: { content: string } }>;
-  const usage = data.usage as { total_tokens?: number } | undefined;
+  const usage = data.usage as {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+    prompt_tokens_details?: { cached_tokens?: number };
+  } | undefined;
 
   logger.info({
     event:            'openai.chat_ok',
@@ -363,7 +392,14 @@ IMPORTANTE: Responda de forma natural, clara e útil. Use emojis quando apropria
   return {
     reply:      choices[0].message.content,
     latencyMs,
+    model:      data.model as string,
     tokensUsed: usage?.total_tokens,
+    tokenDetails: {
+      promptTokens:     usage?.prompt_tokens ?? 0,
+      completionTokens: usage?.completion_tokens ?? 0,
+      totalTokens:      usage?.total_tokens ?? 0,
+      cachedTokens:     usage?.prompt_tokens_details?.cached_tokens ?? 0,
+    },
   };
 }
 
