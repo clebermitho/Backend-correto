@@ -8,6 +8,15 @@ import logger from '../utils/logger';
 
 const router = Router();
 
+const MAX_TOKENS_CEILING = 4096;
+const MIN_TOKENS = 50;
+
+function safeMaxTokens(value: unknown, defaultVal: number): number {
+  const n = Number(value);
+  if (isNaN(n) || n < MIN_TOKENS) return defaultVal;
+  return Math.min(n, MAX_TOKENS_CEILING);
+}
+
 function normalizeModel(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const s = value.trim().replace(/^["']|["']$/g, '').trim();
@@ -78,10 +87,33 @@ async function checkQuota(orgId: string): Promise<{ monthlyQuota: number; usedTo
 }
 
 async function updateQuota(orgId: string, tokens: number): Promise<void> {
-  await prisma.organization.update({
+  const org = await prisma.organization.update({
     where: { id: orgId },
     data: { usedTokens: { increment: tokens } },
+    select: { usedTokens: true, monthlyQuota: true, name: true },
   });
+
+  const usagePercent = org.monthlyQuota > 0
+    ? (org.usedTokens / org.monthlyQuota) * 100
+    : 0;
+
+  if (org.usedTokens > org.monthlyQuota) {
+    logger.warn({
+      event: 'ai.quota_exceeded_after_request',
+      orgId,
+      orgName: org.name,
+      usedTokens: org.usedTokens,
+      monthlyQuota: org.monthlyQuota,
+      overage: org.usedTokens - org.monthlyQuota,
+    });
+  } else if (usagePercent >= 90) {
+    logger.warn({
+      event: 'ai.quota_near_limit',
+      orgId,
+      orgName: org.name,
+      usagePercent: Math.round(usagePercent * 100) / 100,
+    });
+  }
 }
 
 // POST /api/ai/suggestions — extensão envia contexto, recebe 3 sugestões
@@ -124,7 +156,7 @@ router.post('/suggestions', requireAuth, async (req: Request, res: Response, nex
       : 0.2;
 
     const maxTokens = settings['suggestion.maxTokens'] !== undefined
-      ? Number(settings['suggestion.maxTokens'])
+      ? safeMaxTokens(settings['suggestion.maxTokens'], 500)
       : 500;
 
     const promptTemplate = typeof settings['prompt.suggestions'] === 'string'
@@ -195,10 +227,14 @@ router.post('/suggestions', requireAuth, async (req: Request, res: Response, nex
       userId:         req.user!.id,
       eventType:      'ai.suggestions_generated',
       payload: {
-        category:   data.category,
-        count:      result.suggestions.length,
-        latencyMs:  result.latencyMs,
-        tokensUsed: result.tokensUsed,
+        category:         data.category,
+        count:            result.suggestions.length,
+        latencyMs:        result.latencyMs,
+        tokensUsed:       result.tokensUsed,
+        promptTokens:     result.tokenDetails?.promptTokens,
+        completionTokens: result.tokenDetails?.completionTokens,
+        cachedTokens:     result.tokenDetails?.cachedTokens,
+        model:            result.model ?? 'gpt-4o-mini',
       },
       req,
     });
@@ -242,19 +278,23 @@ router.post('/chat', requireAuth, async (req: Request, res: Response, next: Next
     });
     const settings = Object.fromEntries(settingsRows.map(r => [r.key, r.value]));
 
-    const rawModel = settings['suggestion.model'];
+    const rawModel = settings['chat.model'] ?? settings['suggestion.model'];
     const model = normalizeModel(rawModel);
     if (typeof rawModel === 'string' && !model) {
       logger.warn({ event: 'ai.invalid_model_setting', orgId: req.organizationId, rawModel: (rawModel as string).slice(0, 80) });
     }
 
-    const temperature = settings['suggestion.temperature'] !== undefined
-      ? Number(settings['suggestion.temperature'])
-      : 0.2;
+    const temperature = settings['chat.temperature'] !== undefined
+      ? Number(settings['chat.temperature'])
+      : settings['suggestion.temperature'] !== undefined
+        ? Number(settings['suggestion.temperature'])
+        : 0.2;
 
-    const maxTokens = settings['suggestion.maxTokens'] !== undefined
-      ? Number(settings['suggestion.maxTokens'])
-      : 600;
+    const maxTokens = settings['chat.maxTokens'] !== undefined
+      ? safeMaxTokens(settings['chat.maxTokens'], 600)
+      : settings['suggestion.maxTokens'] !== undefined
+        ? safeMaxTokens(settings['suggestion.maxTokens'], 600)
+        : 600;
 
     const systemPromptTemplate = typeof settings['prompt.chat'] === 'string' && (settings['prompt.chat'] as string).trim().length > 0
       ? settings['prompt.chat'] as string
@@ -283,7 +323,14 @@ router.post('/chat', requireAuth, async (req: Request, res: Response, next: Next
       organizationId: req.organizationId!,
       userId:         req.user!.id,
       eventType:      'ai.chat_message',
-      payload: { latencyMs: result.latencyMs, tokensUsed: result.tokensUsed },
+      payload: {
+        latencyMs:        result.latencyMs,
+        tokensUsed:       result.tokensUsed,
+        promptTokens:     result.tokenDetails?.promptTokens,
+        completionTokens: result.tokenDetails?.completionTokens,
+        cachedTokens:     result.tokenDetails?.cachedTokens,
+        model:            result.model ?? 'gpt-4o-mini',
+      },
       req,
     });
 

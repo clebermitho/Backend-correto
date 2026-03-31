@@ -5,7 +5,30 @@ import { requireAuth, requireRole } from '../middleware/auth';
 
 const router = Router();
 
-const DEFAULT_COST_PER_TOKEN = 0.000002; // approximate GPT-4o-mini rate
+const PRICING: Record<string, { inputPerToken: number; outputPerToken: number; cachedPerToken: number }> = {
+  'gpt-4o-mini': {
+    inputPerToken:  0.00000015,   // $0.15 / 1M
+    outputPerToken: 0.0000006,    // $0.60 / 1M
+    cachedPerToken: 0.000000075,  // $0.075 / 1M
+  },
+};
+
+const DEFAULT_MODEL = 'gpt-4o-mini';
+
+function estimateCost(
+  promptTokens: number,
+  completionTokens: number,
+  model: string = DEFAULT_MODEL,
+): number {
+  const prices = PRICING[model] ?? PRICING[DEFAULT_MODEL];
+  return (promptTokens * prices.inputPerToken) + (completionTokens * prices.outputPerToken);
+}
+
+function estimateCostFromTotal(totalTokens: number, model: string = DEFAULT_MODEL): number {
+  const prices = PRICING[model] ?? PRICING[DEFAULT_MODEL];
+  const avgPrice = (0.7 * prices.inputPerToken) + (0.3 * prices.outputPerToken);
+  return totalTokens * avgPrice;
+}
 
 function sinceDefault30Days(): Date {
   return new Date(Date.now() - 30 * 24 * 3600 * 1000);
@@ -42,7 +65,7 @@ router.get(
       const quotaUsagePercent = monthlyQuota > 0
         ? Math.round((totalTokensUsed / monthlyQuota) * 10000) / 100
         : 0;
-      const estimatedCostUSD  = totalTokensUsed * DEFAULT_COST_PER_TOKEN;
+      const estimatedCostUSD  = estimateCostFromTotal(totalTokensUsed);
 
       res.json({
         totalApiCalls,
@@ -76,6 +99,8 @@ router.get(
         name: string;
         email: string | null;
         totalRequests: bigint;
+        promptTokens: bigint;
+        completionTokens: bigint;
         totalTokens: bigint;
       };
 
@@ -85,6 +110,8 @@ router.get(
           u.name,
           u.email,
           COUNT(ue.id)    AS "totalRequests",
+          COALESCE(SUM((ue.payload->>'promptTokens')::numeric), 0)::bigint AS "promptTokens",
+          COALESCE(SUM((ue.payload->>'completionTokens')::numeric), 0)::bigint AS "completionTokens",
           COALESCE(SUM((ue.payload->>'tokensUsed')::numeric), 0)::bigint AS "totalTokens"
         FROM users u
         LEFT JOIN usage_events ue
@@ -97,14 +124,19 @@ router.get(
       `;
 
       const result = rows.map(r => {
-        const totalTokens = Number(r.totalTokens);
+        const promptTokens     = Number(r.promptTokens);
+        const completionTokens = Number(r.completionTokens);
+        const totalTokens      = Number(r.totalTokens);
+        const estimatedCost    = (promptTokens > 0 || completionTokens > 0)
+          ? estimateCost(promptTokens, completionTokens)
+          : estimateCostFromTotal(totalTokens);
         return {
           userId:        r.userId,
           name:          r.name,
           email:         r.email,
           totalRequests: Number(r.totalRequests),
           totalTokens,
-          estimatedCost: totalTokens * DEFAULT_COST_PER_TOKEN,
+          estimatedCost,
         };
       });
 
@@ -132,6 +164,8 @@ router.get(
       type TimeRow = {
         date: Date;
         requests: bigint;
+        promptTokens: bigint;
+        completionTokens: bigint;
         tokens: bigint;
       };
 
@@ -141,6 +175,8 @@ router.get(
             SELECT
               DATE_TRUNC('week', "createdAt")  AS date,
               COUNT(*)                          AS requests,
+              COALESCE(SUM((payload->>'promptTokens')::numeric), 0)::bigint AS "promptTokens",
+              COALESCE(SUM((payload->>'completionTokens')::numeric), 0)::bigint AS "completionTokens",
               COALESCE(SUM((payload->>'tokensUsed')::numeric), 0)::bigint AS tokens
             FROM usage_events
             WHERE "organizationId" = ${orgId}
@@ -153,6 +189,8 @@ router.get(
             SELECT
               DATE_TRUNC('day', "createdAt")   AS date,
               COUNT(*)                          AS requests,
+              COALESCE(SUM((payload->>'promptTokens')::numeric), 0)::bigint AS "promptTokens",
+              COALESCE(SUM((payload->>'completionTokens')::numeric), 0)::bigint AS "completionTokens",
               COALESCE(SUM((payload->>'tokensUsed')::numeric), 0)::bigint AS tokens
             FROM usage_events
             WHERE "organizationId" = ${orgId}
@@ -163,12 +201,17 @@ router.get(
           `;
 
       const result = rows.map(r => {
-        const tokens = Number(r.tokens);
+        const promptTokens     = Number(r.promptTokens);
+        const completionTokens = Number(r.completionTokens);
+        const tokens           = Number(r.tokens);
+        const cost             = (promptTokens > 0 || completionTokens > 0)
+          ? estimateCost(promptTokens, completionTokens)
+          : estimateCostFromTotal(tokens);
         return {
           date:     r.date instanceof Date ? r.date.toISOString().slice(0, 10) : String(r.date),
           requests: Number(r.requests),
           tokens,
-          cost:     tokens * DEFAULT_COST_PER_TOKEN,
+          cost,
         };
       });
 
