@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { requireAuth } from '../middleware/auth';
 import { generateSuggestions, generateChatReply } from '../services/openai';
 import { prisma } from '../utils/prisma';
+import { cache } from '../utils/cache';
 import { log } from '../utils/audit';
 import logger from '../utils/logger';
 
@@ -23,6 +24,35 @@ function normalizeModel(value: unknown): string | undefined {
   if (!s) return undefined;
   if (!/^[a-z0-9][a-z0-9._:-]{0,63}$/i.test(s)) return undefined;
   return s;
+}
+
+// ── Cache helpers ─────────────────────────────────────────────
+
+/** Load all org settings — reuses the same cache key as routes/settings.ts.
+ *  Cache is invalidated whenever settings are written (PUT /api/settings/*). */
+async function loadSettingsCached(orgId: string): Promise<Record<string, unknown>> {
+  const key = `settings:${orgId}`;
+  const hit = cache.get<Record<string, unknown>>(key);
+  if (hit) return hit;
+  const rows = await prisma.setting.findMany({
+    where:  { organizationId: orgId },
+    select: { key: true, value: true },
+  });
+  const settings = Object.fromEntries(rows.map(r => [r.key, r.value]));
+  cache.set(key, settings);
+  return settings;
+}
+
+/** Load active knowledge bases for an org — 2-minute TTL */
+async function loadKBsCached(orgId: string): Promise<Array<{ name: string; content: unknown }>> {
+  const key = `kbs:${orgId}`;
+  const hit = cache.get<Array<{ name: string; content: unknown }>>(key);
+  if (hit) return hit;
+  const kbs = await prisma.knowledgeBase.findMany({
+    where: { organizationId: orgId, isActive: true },
+  });
+  cache.set(key, kbs, 120);
+  return kbs;
 }
 
 // ── Auxiliar: Verificar limite diário do usuário ─────────────
@@ -119,8 +149,11 @@ async function updateQuota(orgId: string, tokens: number): Promise<void> {
 // POST /api/ai/suggestions — extensão envia contexto, recebe 3 sugestões
 router.post('/suggestions', requireAuth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
-    await checkQuota(req.organizationId!);
-    await checkDailyLimit(req.user!.id, req.organizationId!, 'suggestions');
+    // Phase 1: Guards in parallel — fail fast before any heavy work
+    await Promise.all([
+      checkQuota(req.organizationId!),
+      checkDailyLimit(req.user!.id, req.organizationId!, 'suggestions'),
+    ]);
 
     const schema = z.object({
       context:       z.string().min(1),
@@ -129,14 +162,13 @@ router.post('/suggestions', requireAuth, async (req: Request, res: Response, nex
       topExamples:   z.array(z.string()).default([]),
       avoidPatterns: z.array(z.string()).default([]),
     });
-
     const data = schema.parse(req.body);
 
-    const settingsRows = await prisma.setting.findMany({
-      where:  { organizationId: req.organizationId! },
-      select: { key: true, value: true },
-    });
-    const settings = Object.fromEntries(settingsRows.map(r => [r.key, r.value]));
+    // Phase 2: Config loading in parallel (with caching)
+    const [settings, kbs] = await Promise.all([
+      loadSettingsCached(req.organizationId!),
+      loadKBsCached(req.organizationId!),
+    ]);
 
     const learnFromApproved = settings['suggestion.learnFromApproved'] !== undefined
       ? Boolean(settings['suggestion.learnFromApproved'])
@@ -163,42 +195,44 @@ router.post('/suggestions', requireAuth, async (req: Request, res: Response, nex
       ? settings['prompt.suggestions'] as string
       : '';
 
-    const kbs = await prisma.knowledgeBase.findMany({
-      where: { organizationId: req.organizationId!, isActive: true },
-    });
     const knowledgeBases = Object.fromEntries(kbs.map(kb => [kb.name, kb.content]));
 
-    const topExamples = learnFromApproved
-      ? (await prisma.template.findMany({
-          where: {
-            organizationId: req.organizationId!,
-            isActive: true,
-            category: data.category,
-          },
-          select: { text: true },
-          orderBy: [{ score: 'desc' }, { usageCount: 'desc' }, { updatedAt: 'desc' }],
-          take: 3,
-        })).map(t => t.text).filter(Boolean)
-      : [];
+    // Phase 3: Load learning data in parallel (depends on settings flags)
+    const [topExamples, avoidPatterns] = await Promise.all([
+      learnFromApproved
+        ? prisma.template.findMany({
+            where: {
+              organizationId: req.organizationId!,
+              isActive: true,
+              category: data.category,
+            },
+            select:  { text: true },
+            orderBy: [{ score: 'desc' }, { usageCount: 'desc' }, { updatedAt: 'desc' }],
+            take:    3,
+          }).then(ts => ts.map(t => t.text).filter(Boolean))
+        : Promise.resolve([] as string[]),
+      filterRejected
+        ? prisma.suggestionFeedback.findMany({
+            where: {
+              type: 'REJECTED',
+              suggestion: { organizationId: req.organizationId!, category: data.category },
+            },
+            select:  { suggestion: { select: { text: true } } },
+            orderBy: { createdAt: 'desc' },
+            take:    15,
+          }).then(feedbacks =>
+            feedbacks
+              .map(r => r.suggestion?.text)
+              .filter(Boolean)
+              .map(t => String(t).trim().slice(0, 80))
+              .filter(Boolean)
+              .filter((v, i, arr) => arr.indexOf(v) === i)
+              .slice(0, 5)
+          )
+        : Promise.resolve([] as string[]),
+    ]);
 
-    const avoidPatterns = filterRejected
-      ? (await prisma.suggestionFeedback.findMany({
-          where: {
-            type: 'REJECTED',
-            suggestion: { organizationId: req.organizationId!, category: data.category },
-          },
-          select: { suggestion: { select: { text: true } } },
-          orderBy: { createdAt: 'desc' },
-          take: 15,
-        }))
-          .map(r => r.suggestion?.text)
-          .filter(Boolean)
-          .map(t => String(t).trim().slice(0, 80))
-          .filter(Boolean)
-          .filter((v, i, arr) => arr.indexOf(v) === i)
-          .slice(0, 5)
-      : [];
-
+    // Phase 4: OpenAI call
     const result = await generateSuggestions({
       ...data,
       topExamples,
@@ -210,18 +244,19 @@ router.post('/suggestions', requireAuth, async (req: Request, res: Response, nex
       maxTokens,
     });
 
-    if (result.tokensUsed) {
-      await updateQuota(req.organizationId!, result.tokensUsed);
-    }
+    // Phase 5: Quota update + save suggestions in parallel
+    const [, saved] = await Promise.all([
+      result.tokensUsed ? updateQuota(req.organizationId!, result.tokensUsed) : Promise.resolve(undefined),
+      prisma.$transaction(
+        result.suggestions.map(text =>
+          prisma.suggestion.create({
+            data: { organizationId: req.organizationId!, category: data.category, text, source: 'AI' },
+          })
+        )
+      ),
+    ]);
 
-    const saved = await prisma.$transaction(
-      result.suggestions.map(text =>
-        prisma.suggestion.create({
-          data: { organizationId: req.organizationId!, category: data.category, text, source: 'AI' },
-        })
-      )
-    );
-
+    // Non-blocking audit log — must not delay the response
     log({
       organizationId: req.organizationId!,
       userId:         req.user!.id,
@@ -237,7 +272,7 @@ router.post('/suggestions', requireAuth, async (req: Request, res: Response, nex
         model:            result.model ?? 'gpt-4o-mini',
       },
       req,
-    });
+    }).catch(e => logger.warn({ event: 'audit.log_failed', err: e instanceof Error ? e.message : String(e) }));
 
     res.json({
       suggestions: saved.map((s, i) => ({ id: s.id, text: result.suggestions[i] })),
@@ -254,8 +289,11 @@ router.post('/suggestions', requireAuth, async (req: Request, res: Response, nex
 // POST /api/ai/chat — chat livre com a IA (bases + system prompt)
 router.post('/chat', requireAuth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
-    await checkQuota(req.organizationId!);
-    await checkDailyLimit(req.user!.id, req.organizationId!, 'chat');
+    // Phase 1: Guards in parallel
+    await Promise.all([
+      checkQuota(req.organizationId!),
+      checkDailyLimit(req.user!.id, req.organizationId!, 'chat'),
+    ]);
 
     const schema = z.object({
       message:      z.string().min(1),
@@ -272,11 +310,11 @@ router.post('/chat', requireAuth, async (req: Request, res: Response, next: Next
 
     const { message, history } = schema.parse(req.body);
 
-    const settingsRows = await prisma.setting.findMany({
-      where:  { organizationId: req.organizationId! },
-      select: { key: true, value: true },
-    });
-    const settings = Object.fromEntries(settingsRows.map(r => [r.key, r.value]));
+    // Phase 2: Config loading in parallel (with caching)
+    const [settings, kbs] = await Promise.all([
+      loadSettingsCached(req.organizationId!),
+      loadKBsCached(req.organizationId!),
+    ]);
 
     const rawModel = settings['chat.model'] ?? settings['suggestion.model'];
     const model = normalizeModel(rawModel);
@@ -300,11 +338,9 @@ router.post('/chat', requireAuth, async (req: Request, res: Response, next: Next
       ? settings['prompt.chat'] as string
       : '';
 
-    const kbs = await prisma.knowledgeBase.findMany({
-      where: { organizationId: req.organizationId!, isActive: true },
-    });
     const dbKnowledgeBases = Object.fromEntries(kbs.map(kb => [kb.name, kb.content]));
 
+    // Phase 3: OpenAI call
     const result = await generateChatReply({
       message,
       history,
@@ -319,6 +355,7 @@ router.post('/chat', requireAuth, async (req: Request, res: Response, next: Next
       await updateQuota(req.organizationId!, result.tokensUsed);
     }
 
+    // Non-blocking audit log
     log({
       organizationId: req.organizationId!,
       userId:         req.user!.id,
@@ -332,7 +369,7 @@ router.post('/chat', requireAuth, async (req: Request, res: Response, next: Next
         model:            result.model ?? 'gpt-4o-mini',
       },
       req,
-    });
+    }).catch(e => logger.warn({ event: 'audit.log_failed', err: e instanceof Error ? e.message : String(e) }));
 
     res.json({ reply: result.reply, latencyMs: result.latencyMs });
   } catch (err) {

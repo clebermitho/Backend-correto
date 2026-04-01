@@ -1,7 +1,17 @@
 import type { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { prisma } from '../utils/prisma';
+import { cache } from '../utils/cache';
 import logger from '../utils/logger';
+
+/** TTL for the in-memory session cache (seconds). Limits DB hits to at most once per window. */
+const SESSION_CACHE_TTL = 30;
+
+interface CachedSession {
+  user: NonNullable<Request['user']>;
+  organizationId: string;
+  sessionExpiresAt: Date;
+}
 
 /**
  * requireAuth — verifica Bearer token JWT.
@@ -15,6 +25,17 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
   }
 
   const token = header.slice(7);
+
+  // ── Fast path: in-memory session cache ──────────────────────
+  const cached = cache.get<CachedSession>(`session:${token}`);
+  if (cached) {
+    req.user             = cached.user;
+    req.organizationId   = cached.organizationId;
+    req.sessionToken     = token;
+    req.sessionExpiresAt = new Date(cached.sessionExpiresAt);
+    next();
+    return;
+  }
 
   try {
     // Verificar assinatura JWT
@@ -48,6 +69,14 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     req.organizationId   = session.user.organizationId;
     req.sessionToken     = token;
     req.sessionExpiresAt = session.expiresAt;
+
+    // Cache the valid session to skip DB lookup on subsequent requests
+    cache.set<CachedSession>(`session:${token}`, {
+      user:             session.user,
+      organizationId:   session.user.organizationId,
+      sessionExpiresAt: session.expiresAt,
+    }, SESSION_CACHE_TTL);
+
     next();
   } catch (err) {
     const e = err as Record<string, unknown>;

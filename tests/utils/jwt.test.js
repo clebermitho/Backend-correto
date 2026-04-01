@@ -1,4 +1,12 @@
 jest.mock('../../src/utils/prisma', () => require('../mocks/prisma'));
+jest.mock('../../src/utils/cache', () => ({
+  cache: {
+    get:  jest.fn().mockReturnValue(undefined),
+    set:  jest.fn(),
+    del:  jest.fn(),
+    keys: jest.fn().mockReturnValue([]),
+  },
+}));
 
 const jwt = require('jsonwebtoken');
 const {

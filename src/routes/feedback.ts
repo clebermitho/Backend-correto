@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { prisma } from '../utils/prisma';
+import { cache } from '../utils/cache';
 import { requireAuth } from '../middleware/auth';
 import { log } from '../utils/audit';
 import logger from '../utils/logger';
@@ -67,11 +68,16 @@ router.post('/', requireAuth, async (req: Request, res: Response, next: NextFunc
       data:  { score: newScore, usageCount: { increment: usageIncr } },
     });
 
-    const settingsRows = await prisma.setting.findMany({
-      where:  { organizationId: req.organizationId },
-      select: { key: true, value: true },
-    });
-    const settings = Object.fromEntries(settingsRows.map(r => [r.key, r.value]));
+    const settingsCacheKey = `settings:${req.organizationId!}`;
+    let settings = cache.get<Record<string, unknown>>(settingsCacheKey);
+    if (!settings) {
+      const rows = await prisma.setting.findMany({
+        where:  { organizationId: req.organizationId! },
+        select: { key: true, value: true },
+      });
+      settings = Object.fromEntries(rows.map(r => [r.key, r.value]));
+      cache.set(settingsCacheKey, settings);
+    }
 
     const learnFromApproved = settings['suggestion.learnFromApproved'] !== undefined
       ? Boolean(settings['suggestion.learnFromApproved'])
@@ -117,7 +123,7 @@ router.post('/', requireAuth, async (req: Request, res: Response, next: NextFunc
       userId:         req.user!.id,
       eventType:      `suggestion.${data.type.toLowerCase()}`,
       payload:        { suggestionId: data.suggestionId, reason: data.reason },
-    });
+    }).catch(e => logger.warn({ event: 'audit.log_failed', err: e instanceof Error ? e.message : String(e) }));
 
     logger.info({
       event:        `feedback.${data.type.toLowerCase()}`,
