@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../utils/prisma';
+import { cache } from '../utils/cache';
 import { requireAuth, requireRole } from '../middleware/auth';
 import { log } from '../utils/audit';
 import logger from '../utils/logger';
@@ -92,6 +93,9 @@ router.post('/', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (req: R
           eventType: data.id ? 'kb.updated' : 'kb.created',
           payload: { kbId: kb.id, name: kb.name } });
 
+    // Invalidate the KBs cache so the next AI request gets fresh content
+    cache.del(`kbs:${req.organizationId!}`);
+
     res.status(data.id ? 200 : 201).json(kb);
   } catch (err) { next(err); }
 });
@@ -123,6 +127,9 @@ router.post('/:id/sync', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async
     log({ organizationId: req.organizationId!, userId: req.user!.id,
           eventType: 'kb.synced', payload: { kbId: kb.id, name: kb.name } });
 
+    // Invalidate the KBs cache
+    cache.del(`kbs:${req.organizationId!}`);
+
     res.json(updated);
   } catch (err) { next(err); }
 });
@@ -136,6 +143,8 @@ router.delete('/:id', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (r
     if (!kb) { res.status(404).json({ error: 'Base de conhecimento não encontrada.' }); return; }
 
     await prisma.knowledgeBase.update({ where: { id: kb.id }, data: { isActive: false } });
+    // Invalidate the KBs cache
+    cache.del(`kbs:${req.organizationId!}`);
     res.json({ ok: true });
   } catch (err) { next(err); }
 });

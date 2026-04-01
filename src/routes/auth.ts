@@ -115,9 +115,9 @@ router.post('/refresh', async (req: Request, res: Response, next: NextFunction):
       refreshToken: z.string().min(1, 'refreshToken obrigatório.'),
     }).parse(req.body);
 
-    const { token, expiresAt } = await refreshAccessToken(refreshToken);
+    const { token, expiresAt, refreshToken: newRefreshToken, refreshExpiresAt } = await refreshAccessToken(refreshToken);
     logger.info({ event: 'auth.token_refreshed' });
-    res.json({ token, expiresAt });
+    res.json({ token, expiresAt, refreshToken: newRefreshToken, refreshExpiresAt });
   } catch (err) {
     const e = err as Error;
     if (

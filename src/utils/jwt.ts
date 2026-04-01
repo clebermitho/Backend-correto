@@ -1,5 +1,6 @@
 import jwt from 'jsonwebtoken';
 import { prisma } from './prisma';
+import { cache } from './cache';
 import logger from './logger';
 
 // 120h = 5 days — controlled via JWT_TTL_HOURS env var
@@ -57,6 +58,8 @@ export async function revokeSession(token: string): Promise<void> {
     where: { token },
     data: { isRevoked: true },
   });
+  // Invalidar cache imediatamente para garantir que a sessão não seja reutilizada
+  cache.del(`session:${token}`);
 }
 
 // ── Limpeza de sessões expiradas ─────────────────────────────

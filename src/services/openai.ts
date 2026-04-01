@@ -169,8 +169,8 @@ async function generateSuggestions({
   const baseCorenRaw = kb.coren ?? kb['base_coren'] ?? kb['base coren'];
   const baseSistRaw  = kb.chat ?? kb.sistema ?? kb['base_sistema'] ?? kb['base sistema'];
 
-  const baseCoren = baseCorenRaw ? clipText(JSON.stringify(baseCorenRaw, null, 2), 12_000) : '(não carregada)';
-  const baseChat  = baseSistRaw  ? clipText(JSON.stringify(baseSistRaw,  null, 2), 12_000) : '(não carregada)';
+  const baseCoren = baseCorenRaw ? clipText(JSON.stringify(baseCorenRaw), 12_000) : '(não carregada)';
+  const baseChat  = baseSistRaw  ? clipText(JSON.stringify(baseSistRaw),  12_000) : '(não carregada)';
 
   const defaultPrompt = `Você é um assistente especializado do Coren (Conselho Regional de Enfermagem).
 
@@ -320,8 +320,8 @@ async function generateChatReply({
   const baseCorenObj = kb.coren ?? kb['base_coren'] ?? kb['base coren'];
   const baseSistObj  = kb.sistema ?? kb.chat ?? kb['base_sistema'] ?? kb['base sistema'];
 
-  const baseCoren = baseCorenObj ? clipText(JSON.stringify(baseCorenObj, null, 2), 12_000) : '(não carregada)';
-  const baseSist  = baseSistObj  ? clipText(JSON.stringify(baseSistObj,  null, 2), 12_000) : '(não carregada)';
+  const baseCoren = baseCorenObj ? clipText(JSON.stringify(baseCorenObj), 12_000) : '(não carregada)';
+  const baseSist  = baseSistObj  ? clipText(JSON.stringify(baseSistObj),  12_000) : '(não carregada)';
 
   const safeHistory = (Array.isArray(history) ? history : [])
     .map(m => ({
@@ -332,7 +332,6 @@ async function generateChatReply({
     .slice(-10);
 
   const historyText = safeHistory
-    .slice(-10)
     .map(m => `${m.role}: ${m.content}`)
     .join('\n');
 

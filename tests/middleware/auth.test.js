@@ -5,6 +5,14 @@ jest.mock('../../src/utils/logger', () => ({
   error: jest.fn(),
   debug: jest.fn(),
 }));
+jest.mock('../../src/utils/cache', () => ({
+  cache: {
+    get:  jest.fn().mockReturnValue(undefined),
+    set:  jest.fn(),
+    del:  jest.fn(),
+    keys: jest.fn().mockReturnValue([]),
+  },
+}));
 
 const jwt = require('jsonwebtoken');
 const { requireAuth, requireRole } = require('../../src/middleware/auth');
