@@ -1,0 +1,43 @@
+[
+  {
+    "id": "neg-001",
+    "input": {
+      "context": "Profissional ligou para perguntar sobre regularização de débito em atraso.",
+      "question": "Como posso regularizar meu débito?",
+      "category": "NEGOCIACAO"
+    },
+    "expected": {
+      "mustContain": ["regulariza"],
+      "mustNotContain": ["cliente"],
+      "minLength": 50
+    },
+    "tags": ["negociacao", "debito"]
+  },
+  {
+    "id": "cancel-001",
+    "input": {
+      "context": "Profissional deseja cancelar inscrição por aposentadoria.",
+      "question": "Quero cancelar meu registro.",
+      "category": "CANCELAMENTO"
+    },
+    "expected": {
+      "mustContain": ["cancelamento", "registro"],
+      "mustNotContain": ["cliente"],
+      "minLength": 40
+    },
+    "tags": ["cancelamento", "aposentadoria"]
+  },
+  {
+    "id": "doubt-001",
+    "input": {
+      "context": "Profissional pergunta sobre prazo para renovação de carteira.",
+      "question": "Qual o prazo para renovar minha carteira profissional?",
+      "category": "DUVIDA"
+    },
+    "expected": {
+      "mustNotContain": ["cliente", "parcela"],
+      "minLength": 30
+    },
+    "tags": ["duvida", "carteira"]
+  }
+]

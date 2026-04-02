@@ -120,16 +120,79 @@ chatplay-backend/
 │   ├── schema.prisma     ← 8 modelos
 │   ├── seed.js           ← dados de teste
 │   └── migrations/       ← migrations SQL versionadas
+├── eval/                 ← [Fase 2] Fundação de avaliação de qualidade
+│   ├── datasets/         ← Datasets de referência (JSON)
+│   └── README.md         ← Documentação de avaliação
 ├── scripts/
 │   ├── setup.sh          ← setup interativo
 │   └── reset-db.sh       ← reset dev
 ├── src/
-│   ├── index.js          ← entry point
-│   ├── routes/           ← auth, ai, events, suggestions, feedback, metrics, users, settings, templates, knowledgeBases
-│   ├── middleware/        ← auth (JWT), errorHandler
-│   ├── services/         ← openai.js (proxy centralizado)
-│   └── utils/            ← prisma, jwt, audit
+│   ├── index.ts          ← entry point (monta /api/* e /api/v1/*)
+│   ├── config/           ← env.ts, cors.ts, rateLimiter.ts, swagger.ts
+│   ├── routes/
+│   │   ├── auth, ai, events, suggestions, feedback, ... (legado /api/*)
+│   │   └── v1/           ← [Fase 2] API versionada com envelope padrão
+│   │       ├── index.ts  ← v1 router
+│   │       └── ai.ts     ← /api/v1/ai/suggestions, /api/v1/ai/chat
+│   ├── middleware/
+│   │   ├── auth.ts       ← JWT + roles
+│   │   ├── errorHandler.ts ← [Fase 2] traceId + buildErrorEnvelope
+│   │   └── dbHealthGuard.ts
+│   ├── services/
+│   │   ├── openai.ts     ← transporte HTTP para OpenAI (legado, não alterar)
+│   │   ├── aiOrchestrator.ts ← [Fase 2] camada central: fallback, custo, log
+│   │   ├── promptRegistry.ts ← [Fase 2] versionamento de prompts
+│   │   └── evaluation.ts     ← [Fase 2] fundação de avaliação
+│   └── utils/
+│       ├── sanitize.ts   ← [Fase 2] proteção contra prompt injection
+│       ├── prisma.ts, jwt.ts, audit.ts, cache.ts, logger.ts
+├── tests/                ← jest + babel
+│   ├── services/         ← aiOrchestrator.test.js, evaluation.test.js
+│   ├── utils/            ← sanitize.test.js, jwt.test.js
+│   └── middleware/       ← auth.test.js, errorHandler.test.js
 ├── Dockerfile
 ├── docker-compose.yml
 └── .env.example
 ```
+
+---
+
+## API Versionada (/api/v1)
+
+A partir da Fase 2, novos endpoints são expostos sob `/api/v1/*` com envelope padrão:
+
+**Sucesso:**
+```json
+{ "success": true, "data": { ... }, "traceId": "uuid" }
+```
+
+**Erro:**
+```json
+{
+  "success": false,
+  "error": {
+    "code": "RATE_LIMITED",
+    "message": "Cota mensal de IA excedida.",
+    "details": null,
+    "traceId": "uuid"
+  }
+}
+```
+
+### Endpoints v1 disponíveis
+
+| Método | Rota | Descrição |
+|---|---|---|
+| POST | `/api/v1/ai/suggestions` | Sugestões com fallback, custo estimado, sanitização |
+| POST | `/api/v1/ai/chat` | Chat com fallback, custo estimado, sanitização |
+
+Os endpoints legados `/api/ai/*` permanecem sem alteração para compatibilidade.
+
+---
+
+## Novas variáveis de ambiente (Fase 2)
+
+| Variável | Descrição | Padrão |
+|---|---|---|
+| `OPENAI_MODEL` | Modelo primário da OpenAI | `gpt-4o-mini` |
+| `AI_FALLBACK_MODEL` | Modelo de fallback (timeout/rate-limit/provider error) | `gpt-4o-mini` |

@@ -9,6 +9,10 @@ const envSchema = z.object({
   ADMIN_BOOTSTRAP_SECRET: z.string().optional(),
   ALLOWED_ORIGINS: z.string().optional(),
   LOG_LEVEL: z.string().default('info'),
+  /** Primary model override (falls back to gpt-4o-mini if not set) */
+  OPENAI_MODEL: z.string().optional(),
+  /** Fallback model used when primary fails due to timeout/rate-limit/provider error */
+  AI_FALLBACK_MODEL: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);
