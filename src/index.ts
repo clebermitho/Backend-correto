@@ -63,10 +63,13 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 });
 
 // ── Rate limiting ────────────────────────────────────────────
-app.use('/api', globalLimiter);
+app.use('/api',    globalLimiter);
 app.use('/api/auth/login',    authLimiter);
 app.use('/api/auth/register', authLimiter);
 app.use('/api/ai',            aiLimiter);
+app.use('/api/v1/auth/login',    authLimiter);
+app.use('/api/v1/auth/register', authLimiter);
+app.use('/api/v1/ai',            aiLimiter);
 
 // ── Middleware: DB Health Guard ──────────────────────────────
 app.use('/api', dbHealthGuard);
@@ -87,6 +90,25 @@ app.use('/api/quota',           quotaRouter);
 app.use('/api/analytics',       analyticsRouter);
 // ── Versioned API ────────────────────────────────────────────
 app.use('/api/v1',              v1Router);
+
+// ── API v1 — aliases (backward-compatible, additive) ────────
+// All existing /api/* routes are also available under /api/v1/*.
+// In Phase 2, /api/v1/* will carry the full v1 contract (standardized
+// errors with code/traceId, pagination, idempotency keys, etc.).
+// Until then, these aliases allow clients to start adopting the new
+// path prefix without any behavioral change.
+app.use('/api/v1/auth',            authRouter);
+app.use('/api/v1/events',          eventsRouter);
+app.use('/api/v1/suggestions',     suggestionsRouter);
+app.use('/api/v1/feedback',        feedbackRouter);
+app.use('/api/v1/metrics',         metricsRouter);
+app.use('/api/v1/settings',        settingsRouter);
+app.use('/api/v1/ai',              aiRouter);
+app.use('/api/v1/templates',       templatesRouter);
+app.use('/api/v1/users',           usersRouter);
+app.use('/api/v1/knowledge-bases', knowledgeBasesRouter);
+app.use('/api/v1/quota',           quotaRouter);
+app.use('/api/v1/analytics',       analyticsRouter);
 
 // ── Health check robusto ─────────────────────────────────────
 app.get('/health', async (req: Request, res: Response) => {

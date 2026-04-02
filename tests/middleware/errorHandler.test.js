@@ -9,7 +9,7 @@ const { ZodError, z } = require('zod');
 const { errorHandler, createError } = require('../../src/middleware/errorHandler');
 
 function mockReq(overrides = {}) {
-  return { path: '/test', method: 'GET', user: null, ...overrides };
+  return { path: '/test', method: 'GET', user: null, headers: {}, ...overrides };
 }
 
 function mockRes() {
@@ -41,6 +41,7 @@ describe('errorHandler', () => {
     expect(res.status).toHaveBeenCalledWith(400);
     const body = res.json.mock.calls[0][0];
     expect(body.error).toBe('Dados inválidos.');
+    expect(body.code).toBe('VALIDATION_ERROR');
     expect(Array.isArray(body.issues)).toBe(true);
   });
 
@@ -52,7 +53,9 @@ describe('errorHandler', () => {
     errorHandler(err, req, res, jest.fn());
 
     expect(res.status).toHaveBeenCalledWith(404);
-    expect(res.json).toHaveBeenCalledWith({ error: 'Not found' });
+    const body = res.json.mock.calls[0][0];
+    expect(body.error).toBe('Not found');
+    expect(body.code).toBe('NOT_FOUND');
   });
 
   it('handles Prisma P2002 → 409', () => {
@@ -64,7 +67,9 @@ describe('errorHandler', () => {
     errorHandler(err, req, res, jest.fn());
 
     expect(res.status).toHaveBeenCalledWith(409);
-    expect(res.json).toHaveBeenCalledWith({ error: 'Registro duplicado.' });
+    const body = res.json.mock.calls[0][0];
+    expect(body.error).toBe('Registro duplicado.');
+    expect(body.code).toBe('CONFLICT');
   });
 
   it('handles Prisma P2025 → 404', () => {
@@ -76,7 +81,9 @@ describe('errorHandler', () => {
     errorHandler(err, req, res, jest.fn());
 
     expect(res.status).toHaveBeenCalledWith(404);
-    expect(res.json).toHaveBeenCalledWith({ error: 'Registro não encontrado.' });
+    const body = res.json.mock.calls[0][0];
+    expect(body.error).toBe('Registro não encontrado.');
+    expect(body.code).toBe('NOT_FOUND');
   });
 
   it('handles Prisma P2003 → 400', () => {
@@ -88,7 +95,9 @@ describe('errorHandler', () => {
     errorHandler(err, req, res, jest.fn());
 
     expect(res.status).toHaveBeenCalledWith(400);
-    expect(res.json).toHaveBeenCalledWith({ error: 'Referência inválida: registro relacionado não encontrado.' });
+    const body = res.json.mock.calls[0][0];
+    expect(body.error).toBe('Referência inválida: registro relacionado não encontrado.');
+    expect(body.code).toBe('INVALID_REQUEST');
   });
 
   it('handles PrismaClientValidationError → 400', () => {
@@ -100,7 +109,9 @@ describe('errorHandler', () => {
     errorHandler(err, req, res, jest.fn());
 
     expect(res.status).toHaveBeenCalledWith(400);
-    expect(res.json).toHaveBeenCalledWith({ error: 'Dados inválidos para a operação no banco de dados.' });
+    const body = res.json.mock.calls[0][0];
+    expect(body.error).toBe('Dados inválidos para a operação no banco de dados.');
+    expect(body.code).toBe('VALIDATION_ERROR');
   });
 
   it('handles PrismaClientInitializationError → 503', () => {
@@ -112,7 +123,9 @@ describe('errorHandler', () => {
     errorHandler(err, req, res, jest.fn());
 
     expect(res.status).toHaveBeenCalledWith(503);
-    expect(res.json).toHaveBeenCalledWith({ error: 'Banco de dados temporariamente indisponível. Tente novamente em instantes.' });
+    const body = res.json.mock.calls[0][0];
+    expect(body.error).toBe('Banco de dados temporariamente indisponível. Tente novamente em instantes.');
+    expect(body.code).toBe('SERVICE_UNAVAILABLE');
   });
 
   it('handles AbortError → 504', () => {
@@ -124,7 +137,9 @@ describe('errorHandler', () => {
     errorHandler(err, req, res, jest.fn());
 
     expect(res.status).toHaveBeenCalledWith(504);
-    expect(res.json).toHaveBeenCalledWith({ error: 'Operação cancelada por timeout.' });
+    const body = res.json.mock.calls[0][0];
+    expect(body.error).toBe('Operação cancelada por timeout.');
+    expect(body.code).toBe('TIMEOUT');
   });
 
   it('handles unknown error → 500', () => {
@@ -135,7 +150,31 @@ describe('errorHandler', () => {
     errorHandler(err, req, res, jest.fn());
 
     expect(res.status).toHaveBeenCalledWith(500);
-    expect(res.json).toHaveBeenCalledWith({ error: 'Erro interno do servidor.' });
+    const body = res.json.mock.calls[0][0];
+    expect(body.error).toBe('Erro interno do servidor.');
+    expect(body.code).toBe('INTERNAL_ERROR');
+  });
+
+  it('includes traceId from x-request-id header when present', () => {
+    const err = new Error('Something unexpected happened');
+    const req = mockReq({ headers: { 'x-request-id': 'test-trace-123' } });
+    const res = mockRes();
+
+    errorHandler(err, req, res, jest.fn());
+
+    const body = res.json.mock.calls[0][0];
+    expect(body.traceId).toBe('test-trace-123');
+  });
+
+  it('omits traceId when x-request-id header is absent', () => {
+    const err = new Error('Something unexpected happened');
+    const req = mockReq({ headers: {} });
+    const res = mockRes();
+
+    errorHandler(err, req, res, jest.fn());
+
+    const body = res.json.mock.calls[0][0];
+    expect(body.traceId).toBeUndefined();
   });
 });
 
