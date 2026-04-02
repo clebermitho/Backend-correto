@@ -110,6 +110,25 @@ app.use('/api/v1/knowledge-bases', knowledgeBasesRouter);
 app.use('/api/v1/quota',           quotaRouter);
 app.use('/api/v1/analytics',       analyticsRouter);
 
+// ── API v1 — aliases (backward-compatible, additive) ────────
+// All existing /api/* routes are also available under /api/v1/*.
+// In Phase 2, /api/v1/* will carry the full v1 contract (standardized
+// errors with code/traceId, pagination, idempotency keys, etc.).
+// Until then, these aliases allow clients to start adopting the new
+// path prefix without any behavioral change.
+app.use('/api/v1/auth',            authRouter);
+app.use('/api/v1/events',          eventsRouter);
+app.use('/api/v1/suggestions',     suggestionsRouter);
+app.use('/api/v1/feedback',        feedbackRouter);
+app.use('/api/v1/metrics',         metricsRouter);
+app.use('/api/v1/settings',        settingsRouter);
+app.use('/api/v1/ai',              aiRouter);
+app.use('/api/v1/templates',       templatesRouter);
+app.use('/api/v1/users',           usersRouter);
+app.use('/api/v1/knowledge-bases', knowledgeBasesRouter);
+app.use('/api/v1/quota',           quotaRouter);
+app.use('/api/v1/analytics',       analyticsRouter);
+
 // ── Health check robusto ─────────────────────────────────────
 app.get('/health', async (req: Request, res: Response) => {
   const dbOk = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);

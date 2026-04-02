@@ -19,44 +19,6 @@ export type ErrorCode =
   | 'TIMEOUT'
   | 'INTERNAL_ERROR';
 
-// ── Standard error envelope (used by /api/v1 routes) ────────
-
-export interface ApiErrorEnvelope {
-  code: string;
-  message: string;
-  details?: unknown;
-  traceId?: string;
-}
-
-export interface ApiErrorResponse {
-  success: false;
-  error: ApiErrorEnvelope;
-}
-
-/**
- * Builds a standard v1 error response envelope for /api/v1 routes.
- * Legacy /api/* routes use the flat `{ error, code, traceId }` shape via `errorBody`.
- */
-export function buildErrorEnvelope(
-  code: string,
-  message: string,
-  req: Request,
-  details?: unknown
-): ApiErrorResponse {
-  return {
-    success: false,
-    error: {
-      code,
-      message,
-      details,
-      traceId: req?.headers?.['x-request-id'] as string | undefined,
-    },
-  };
-}
-
-/** Extract the traceId from the request (set by the correlation-id middleware in index.ts). */
-function getTraceId(req: Request): string | undefined {
-  const id = req?.headers?.['x-request-id'];
   return typeof id === 'string' ? id : undefined;
 }
 
