@@ -31,6 +31,7 @@ model Organization {
   templates     Template[]
   knowledgeBases KnowledgeBase[]
   settings_rows  Setting[]
+  aiCallLogs     AICallLog[]
 
   @@map("organizations")
 }
@@ -220,4 +221,63 @@ model KnowledgeBase {
   organization Organization @relation(fields: [organizationId], references: [id])
 
   @@map("knowledge_bases")
+}
+
+// ─────────────────────────────────────────────
+// PROMPT_VERSIONS — versionamento de prompts de IA
+// Permite gerenciar, publicar e fazer rollback de
+// templates de prompt sem redeployment.
+// ─────────────────────────────────────────────
+model PromptVersion {
+  id             String    @id @default(cuid())
+  organizationId String?                        // null = global (padrão do sistema)
+  name           String                         // ex: "suggestions", "chat"
+  version        String                         // semver: "1.0.0"
+  template       String                         // template com {{VARIÁVEIS}}
+  isActive       Boolean   @default(false)      // apenas um ativo por (org, name)
+  isDefault      Boolean   @default(false)      // versão padrão do sistema
+  changelog      String?
+  owner          String?
+  metadata       Json      @default("{}")       // ex: { "abGroup": "B", "model": "gpt-4o" }
+  createdAt      DateTime  @default(now())
+  activatedAt    DateTime?
+  deactivatedAt  DateTime?
+
+  @@index([organizationId, name])
+  @@index([name, isActive])
+  @@map("prompt_versions")
+}
+
+// ─────────────────────────────────────────────
+// AI_CALL_LOGS — log granular de chamadas LLM
+// Habilita observabilidade, análise de custo,
+// taxa de fallback e qualidade de resposta.
+// ─────────────────────────────────────────────
+model AICallLog {
+  id               String    @id @default(cuid())
+  organizationId   String
+  userId           String?
+  traceId          String?
+  callType         String                         // suggestions | chat | embedding
+  model            String
+  promptVersionId  String?
+  promptTokens     Int
+  completionTokens Int
+  totalTokens      Int
+  cachedTokens     Int       @default(0)
+  latencyMs        Int
+  errorType        String?                        // null = success | timeout | rate_limit | provider_error | context_too_long
+  errorMessage     String?
+  fallbackUsed     Boolean   @default(false)
+  retryCount       Int       @default(0)
+  estimatedCostUsd Float?
+  qualityScore     Float?                         // score da avaliação de qualidade (Fase 2)
+  createdAt        DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId, callType])
+  @@index([traceId])
+  @@index([createdAt])
+  @@map("ai_call_logs")
 }
