@@ -2,6 +2,10 @@ import logger from '../utils/logger';
 import { isCanonicalKnowledgeBaseContent } from '../utils/knowledgeBaseContract';
 
 const OPENAI_URL = 'https://api.openai.com/v1/chat/completions';
+const MAX_CONTEXT_CHARS = 12_000;
+const MAX_SECTION_ITEMS = 8;
+const MAX_CORE_RULES = 15;
+const MAX_SECURITY_RULES = 12;
 
 interface OpenAIMessage {
   role: 'system' | 'user' | 'assistant';
@@ -60,20 +64,40 @@ function normalizeKnowledgeBases(knowledgeBases?: Record<string, unknown>): Reco
   );
 }
 
+/**
+ * Converts mixed content values into a compact, token-friendly string.
+ * Used to keep prompt sections readable and bounded for model context limits.
+ */
 function stringifyCompact(value: unknown, maxChars = 900): string {
   if (value === undefined || value === null) return '';
   if (typeof value === 'string') return clipText(value, maxChars);
-  if (Array.isArray(value)) return clipText(value.map(v => String(v)).join('; '), maxChars);
+  if (Array.isArray(value)) {
+    return clipText(value.map(v => (typeof v === 'string' ? v : JSON.stringify(v))).join('; '), maxChars);
+  }
   return clipText(JSON.stringify(value), maxChars);
 }
 
-function formatNamedObjectSection(title: string, value: unknown, maxItems = 8): string {
+/**
+ * Builds a readable section from an object-based KB block.
+ * Keeps the output bounded by limiting entry count and value size.
+ */
+function formatNamedObjectSection(title: string, value: unknown, maxItems = MAX_SECTION_ITEMS): string {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return '';
   const entries = Object.entries(value as Record<string, unknown>).slice(0, maxItems);
   if (entries.length === 0) return '';
   return `${title}:\n${entries.map(([k, v]) => `- ${k}: ${stringifyCompact(v, 350)}`).join('\n')}`;
 }
 
+function formatStringListSection(title: string, values: unknown, maxItems: number): string {
+  if (!Array.isArray(values) || values.length === 0) return '';
+  return `${title}:\n${values.slice(0, maxItems).map((v: unknown) => `- ${String(v)}`).join('\n')}`;
+}
+
+/**
+ * Resolves the canonical single-file KB by priority:
+ * 1) explicit aliases (`base-conhecimento`, `knowledge_context`)
+ * 2) first KB object that matches canonical structure.
+ */
 function extractUnifiedKnowledgeBase(kb: Record<string, unknown>): Record<string, unknown> | null {
   const explicit = kb['base-conhecimento'] ?? kb['knowledge_context'];
   if (isCanonicalKnowledgeBaseContent(explicit)) return explicit;
@@ -89,32 +113,26 @@ function buildUnifiedKnowledgeContext(content: Record<string, unknown>): string 
 
   blocks.push(formatNamedObjectSection('PROJETO', content.project));
   blocks.push(formatNamedObjectSection('COMPORTAMENTO', content.behavior));
-
-  if (Array.isArray(content.core_rules) && content.core_rules.length > 0) {
-    blocks.push(`REGRAS CENTRAIS:\n${content.core_rules.slice(0, 15).map((r: unknown) => `- ${String(r)}`).join('\n')}`);
-  }
+  blocks.push(formatStringListSection('REGRAS CENTRAIS', content.core_rules, MAX_CORE_RULES));
 
   blocks.push(formatNamedObjectSection('PROCEDIMENTOS', content.procedures));
   blocks.push(formatNamedObjectSection('PADRÕES DE RESPOSTA', content.response_patterns));
   blocks.push(formatNamedObjectSection('OBJEÇÕES', content.objections));
   blocks.push(formatNamedObjectSection('CONTATOS', content.contacts));
-
-  if (Array.isArray(content.security_rules) && content.security_rules.length > 0) {
-    blocks.push(`REGRAS DE SEGURANÇA:\n${content.security_rules.slice(0, 12).map((r: unknown) => `- ${String(r)}`).join('\n')}`);
-  }
+  blocks.push(formatStringListSection('REGRAS DE SEGURANÇA', content.security_rules, MAX_SECURITY_RULES));
 
   blocks.push(formatNamedObjectSection('FALLBACK', content.fallback));
   blocks.push(formatNamedObjectSection('MODELO DE RESPOSTA', content.response_model));
 
-  return clipText(blocks.filter(Boolean).join('\n\n'), 12_000);
+  return clipText(blocks.filter(Boolean).join('\n\n'), MAX_CONTEXT_CHARS);
 }
 
 function extractLegacyBases(kb: Record<string, unknown>): { baseCoren: string; baseSistema: string } {
   const baseCorenRaw = kb.coren ?? kb['base_coren'] ?? kb['base coren'];
   const baseSistRaw  = kb.chat ?? kb.sistema ?? kb['base_sistema'] ?? kb['base sistema'];
   return {
-    baseCoren: baseCorenRaw ? clipText(JSON.stringify(baseCorenRaw), 6_000) : '',
-    baseSistema: baseSistRaw ? clipText(JSON.stringify(baseSistRaw), 6_000) : '',
+    baseCoren: baseCorenRaw ? clipText(JSON.stringify(baseCorenRaw), MAX_CONTEXT_CHARS / 2) : '',
+    baseSistema: baseSistRaw ? clipText(JSON.stringify(baseSistRaw), MAX_CONTEXT_CHARS / 2) : '',
   };
 }
 
@@ -268,7 +286,7 @@ NÃO use numeração nem prefixos como "Resposta 1:".`;
         BASE_SISTEMA:    baseSistemaVar,
         AVOID_BLOCK:     avoidBlock.trim(),
         EXAMPLES_BLOCK:  examplesBlock.trim(),
-        CONTEXT:         clipText(context, 12_000),
+        CONTEXT:         clipText(context, MAX_CONTEXT_CHARS),
         QUESTION:        question,
         CATEGORY:        category,
       }).trim()

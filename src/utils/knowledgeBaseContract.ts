@@ -14,6 +14,11 @@ function normalizeUrl(url?: string | null): string {
   return String(url || '').trim().toLowerCase().replace(/\/+$/, '');
 }
 
+function isCanonicalKnowledgeBaseName(name?: string | null): boolean {
+  const normalized = String(name || '').trim().toLowerCase().replace(/[\s_]+/g, '-');
+  return normalized.includes('base-conhecimento') || normalized.includes('knowledge-base');
+}
+
 function hasStringArrayField(obj: Record<string, unknown>, key: string): boolean {
   return Array.isArray(obj[key]) && (obj[key] as unknown[]).every((v: unknown) => typeof v === 'string');
 }
@@ -54,8 +59,7 @@ export function isCanonicalKnowledgeBaseContent(content: unknown): content is Re
 export function shouldValidateAsCanonicalKnowledgeBase(input: CanonicalKBInput): boolean {
   if (isCanonicalKnowledgeBaseSourceUrl(input.sourceUrl)) return true;
 
-  const name = String(input.name || '').trim().toLowerCase();
-  if (name.includes('base-conhecimento') || name.includes('knowledge-base') || name.includes('knowledge base')) {
+  if (isCanonicalKnowledgeBaseName(input.name)) {
     return true;
   }
 

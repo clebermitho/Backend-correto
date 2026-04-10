@@ -60,11 +60,17 @@ async function loadKBsCached(orgId: string): Promise<Array<{ name: string; conte
 function resolveUnifiedKnowledgeBase(
   kbs: Array<{ name: string; content: unknown; sourceUrl: string | null }>
 ): Record<string, unknown> | undefined {
-  const bySource = kbs.find(kb => isCanonicalKnowledgeBaseSourceUrl(kb.sourceUrl) && isCanonicalKnowledgeBaseContent(kb.content));
-  if (bySource && isCanonicalKnowledgeBaseContent(bySource.content)) return bySource.content;
+  const bySource = kbs.find(
+    (kb): kb is { name: string; content: Record<string, unknown>; sourceUrl: string | null } =>
+      isCanonicalKnowledgeBaseSourceUrl(kb.sourceUrl) && isCanonicalKnowledgeBaseContent(kb.content)
+  );
+  if (bySource) return bySource.content;
 
-  const byStructure = kbs.find(kb => isCanonicalKnowledgeBaseContent(kb.content));
-  if (byStructure && isCanonicalKnowledgeBaseContent(byStructure.content)) return byStructure.content;
+  const byStructure = kbs.find(
+    (kb): kb is { name: string; content: Record<string, unknown>; sourceUrl: string | null } =>
+      isCanonicalKnowledgeBaseContent(kb.content)
+  );
+  if (byStructure) return byStructure.content;
 
   return undefined;
 }
