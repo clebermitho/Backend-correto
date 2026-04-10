@@ -1,9 +1,10 @@
 /**
- * Suggestions prompt — version 1.0.0
+ * Suggestions prompt — version 1.1.0
  *
  * Variables available in this template:
- *   {{BASE_COREN}}     - Content of the COREN knowledge base (truncated)
- *   {{BASE_SISTEMA}}   - Content of the system/chat knowledge base (truncated)
+ *   {{KNOWLEDGE_CONTEXT}} - Unified canonical knowledge base context
+ *   {{BASE_COREN}}        - Legacy compatibility fallback context
+ *   {{BASE_SISTEMA}}      - Legacy compatibility fallback context
  *   {{AVOID_BLOCK}}    - Formatted block of patterns to avoid
  *   {{EXAMPLES_BLOCK}} - Formatted block of approved examples
  *   {{CONTEXT}}        - Conversation context from the extension
@@ -12,17 +13,14 @@
  */
 export const suggestionPromptV1 = {
   id:        'suggestions',
-  version:   '1.0.0',
+  version:   '1.1.0',
   createdAt: '2026-04-02',
   owner:     'system',
-  changelog: 'Initial version extracted from openai.ts hardcoded default',
+  changelog: 'Migrated to unified KNOWLEDGE_CONTEXT with legacy placeholder compatibility',
   template: `Você é um assistente especializado do Coren (Conselho Regional de Enfermagem).
 
-BASE COREN:
-{{BASE_COREN}}
-
-BASE SISTEMA:
-{{BASE_SISTEMA}}
+BASE DE CONHECIMENTO UNIFICADA:
+{{KNOWLEDGE_CONTEXT}}
 
 REGRAS:
 1. Nunca chame o profissional de "cliente" — use "profissional".

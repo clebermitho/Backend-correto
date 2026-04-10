@@ -87,8 +87,8 @@ async function main() {
     create: {
       id:             'coren-kb-seed',
       organizationId: org.id,
-      name:           'coren',
-      sourceUrl:      'https://raw.githubusercontent.com/clebermitho/base-de-conhecimento/refs/heads/main/base_coren.json',
+      name:           'base-conhecimento',
+      sourceUrl:      'https://raw.githubusercontent.com/clebermitho/knowledge-base/main/base-conhecimento.json',
       content:        {},
     },
   });

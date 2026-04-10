@@ -11,6 +11,8 @@
  * - `getSystemPrompt(name, orgOverride?)` returns the rendered system prompt for a
  *   given name, preferring an org-level override over the system default.
  * - Templates use `{{VARIABLE}}` syntax (uppercase only) for substitution.
+ * - Canonical prompt context is `{{KNOWLEDGE_CONTEXT}}`; `{{BASE_COREN}}` and
+ *   `{{BASE_SISTEMA}}` remain supported for backward compatibility.
  * - Unknown variables are replaced with empty string (silent — never throw on missing vars).
  */
 
