@@ -1,6 +1,11 @@
 import logger from '../utils/logger';
+import { isCanonicalKnowledgeBaseContent } from '../utils/knowledgeBaseContract';
 
 const OPENAI_URL = 'https://api.openai.com/v1/chat/completions';
+const MAX_CONTEXT_CHARS = 12_000;
+const MAX_SECTION_ITEMS = 8;
+const MAX_CORE_RULES = 15;
+const MAX_SECURITY_RULES = 12;
 
 interface OpenAIMessage {
   role: 'system' | 'user' | 'assistant';
@@ -51,6 +56,84 @@ function clipText(value: unknown, maxChars: number): string {
   const s = String(value);
   if (s.length <= maxChars) return s;
   return `${s.slice(0, maxChars)}\n\n[...truncado...]`;
+}
+
+function normalizeKnowledgeBases(knowledgeBases?: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(knowledgeBases || {}).map(([k, v]) => [String(k).toLowerCase().trim(), v])
+  );
+}
+
+/**
+ * Converts mixed content values into a compact, token-friendly string.
+ * Used to keep prompt sections readable and bounded for model context limits.
+ */
+function stringifyCompact(value: unknown, maxChars = 900): string {
+  if (value === undefined || value === null) return '';
+  if (typeof value === 'string') return clipText(value, maxChars);
+  if (Array.isArray(value)) {
+    return clipText(value.map(v => (typeof v === 'string' ? v : JSON.stringify(v))).join('; '), maxChars);
+  }
+  return clipText(JSON.stringify(value), maxChars);
+}
+
+/**
+ * Builds a readable section from an object-based KB block.
+ * Keeps the output bounded by limiting entry count and value size.
+ */
+function formatNamedObjectSection(title: string, value: unknown, maxItems = MAX_SECTION_ITEMS): string {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return '';
+  const entries = Object.entries(value as Record<string, unknown>).slice(0, maxItems);
+  if (entries.length === 0) return '';
+  return `${title}:\n${entries.map(([k, v]) => `- ${k}: ${stringifyCompact(v, 350)}`).join('\n')}`;
+}
+
+function formatStringListSection(title: string, values: unknown, maxItems: number): string {
+  if (!Array.isArray(values) || values.length === 0) return '';
+  return `${title}:\n${values.slice(0, maxItems).map((v: unknown) => `- ${String(v)}`).join('\n')}`;
+}
+
+/**
+ * Resolves the canonical single-file KB by priority:
+ * 1) explicit aliases (`base-conhecimento`, `knowledge_context`)
+ * 2) first KB object that matches canonical structure.
+ */
+function extractUnifiedKnowledgeBase(kb: Record<string, unknown>): Record<string, unknown> | null {
+  const explicit = kb['base-conhecimento'] ?? kb['knowledge_context'];
+  if (isCanonicalKnowledgeBaseContent(explicit)) return explicit;
+
+  for (const value of Object.values(kb)) {
+    if (isCanonicalKnowledgeBaseContent(value)) return value;
+  }
+  return null;
+}
+
+function buildUnifiedKnowledgeContext(content: Record<string, unknown>): string {
+  const blocks: string[] = [];
+
+  blocks.push(formatNamedObjectSection('PROJETO', content.project));
+  blocks.push(formatNamedObjectSection('COMPORTAMENTO', content.behavior));
+  blocks.push(formatStringListSection('REGRAS CENTRAIS', content.core_rules, MAX_CORE_RULES));
+
+  blocks.push(formatNamedObjectSection('PROCEDIMENTOS', content.procedures));
+  blocks.push(formatNamedObjectSection('PADRÕES DE RESPOSTA', content.response_patterns));
+  blocks.push(formatNamedObjectSection('OBJEÇÕES', content.objections));
+  blocks.push(formatNamedObjectSection('CONTATOS', content.contacts));
+  blocks.push(formatStringListSection('REGRAS DE SEGURANÇA', content.security_rules, MAX_SECURITY_RULES));
+
+  blocks.push(formatNamedObjectSection('FALLBACK', content.fallback));
+  blocks.push(formatNamedObjectSection('MODELO DE RESPOSTA', content.response_model));
+
+  return clipText(blocks.filter(Boolean).join('\n\n'), MAX_CONTEXT_CHARS);
+}
+
+function extractLegacyBases(kb: Record<string, unknown>): { baseCoren: string; baseSistema: string } {
+  const baseCorenRaw = kb.coren ?? kb['base_coren'] ?? kb['base coren'];
+  const baseSistRaw  = kb.chat ?? kb.sistema ?? kb['base_sistema'] ?? kb['base sistema'];
+  return {
+    baseCoren: baseCorenRaw ? clipText(JSON.stringify(baseCorenRaw), MAX_CONTEXT_CHARS / 2) : '',
+    baseSistema: baseSistRaw ? clipText(JSON.stringify(baseSistRaw), MAX_CONTEXT_CHARS / 2) : '',
+  };
 }
 
 // ── Retry com backoff exponencial ───────────────────────────
@@ -154,9 +237,7 @@ async function generateSuggestions({
   tokensUsed: number | undefined;
   tokenDetails: TokenDetails;
 }> {
-  const kb = Object.fromEntries(
-    Object.entries(knowledgeBases || {}).map(([k, v]) => [String(k).toLowerCase().trim(), v])
-  );
+  const kb = normalizeKnowledgeBases(knowledgeBases);
 
   const avoidBlock = avoidPatterns.length > 0
     ? `\n🚫 EVITE estas palavras/frases reprovadas: ${avoidPatterns.map(p => `"${p}"`).join(', ')}`
@@ -166,19 +247,18 @@ async function generateSuggestions({
     ? `\n📚 Exemplos aprovados para ${category}:\n${topExamples.map(e => `- ${e}`).join('\n')}`
     : '';
 
-  const baseCorenRaw = kb.coren ?? kb['base_coren'] ?? kb['base coren'];
-  const baseSistRaw  = kb.chat ?? kb.sistema ?? kb['base_sistema'] ?? kb['base sistema'];
-
-  const baseCoren = baseCorenRaw ? clipText(JSON.stringify(baseCorenRaw), 12_000) : '(não carregada)';
-  const baseChat  = baseSistRaw  ? clipText(JSON.stringify(baseSistRaw),  12_000) : '(não carregada)';
+  const unifiedKb = extractUnifiedKnowledgeBase(kb);
+  const knowledgeContext = unifiedKb ? buildUnifiedKnowledgeContext(unifiedKb) : '';
+  const { baseCoren, baseSistema } = extractLegacyBases(kb);
+  const fallbackKnowledgeContext = [baseCoren, baseSistema].filter(Boolean).join('\n\n');
+  const resolvedKnowledgeContext = knowledgeContext || fallbackKnowledgeContext || '(não carregada)';
+  const baseCorenVar = baseCoren || resolvedKnowledgeContext;
+  const baseSistemaVar = baseSistema || resolvedKnowledgeContext;
 
   const defaultPrompt = `Você é um assistente especializado do Coren (Conselho Regional de Enfermagem).
 
-BASE COREN:
-${baseCoren}
-
-BASE SISTEMA:
-${baseChat}
+BASE DE CONHECIMENTO UNIFICADA:
+${resolvedKnowledgeContext}
 
 REGRAS:
 1. Nunca chame o profissional de "cliente" — use "profissional".
@@ -201,11 +281,12 @@ NÃO use numeração nem prefixos como "Resposta 1:".`;
 
   const prompt = (promptTemplate && promptTemplate.trim().length > 0)
     ? renderTemplate(promptTemplate, {
-        BASE_COREN:      baseCoren,
-        BASE_SISTEMA:    baseChat,
+        KNOWLEDGE_CONTEXT: resolvedKnowledgeContext,
+        BASE_COREN:      baseCorenVar,
+        BASE_SISTEMA:    baseSistemaVar,
         AVOID_BLOCK:     avoidBlock.trim(),
         EXAMPLES_BLOCK:  examplesBlock.trim(),
-        CONTEXT:         clipText(context, 12_000),
+        CONTEXT:         clipText(context, MAX_CONTEXT_CHARS),
         QUESTION:        question,
         CATEGORY:        category,
       }).trim()
@@ -313,15 +394,14 @@ async function generateChatReply({
   tokensUsed: number | undefined;
   tokenDetails: TokenDetails;
 }> {
-  const kb = Object.fromEntries(
-    Object.entries(dbKnowledgeBases || {}).map(([k, v]) => [String(k).toLowerCase().trim(), v])
-  );
-
-  const baseCorenObj = kb.coren ?? kb['base_coren'] ?? kb['base coren'];
-  const baseSistObj  = kb.sistema ?? kb.chat ?? kb['base_sistema'] ?? kb['base sistema'];
-
-  const baseCoren = baseCorenObj ? clipText(JSON.stringify(baseCorenObj), 12_000) : '(não carregada)';
-  const baseSist  = baseSistObj  ? clipText(JSON.stringify(baseSistObj),  12_000) : '(não carregada)';
+  const kb = normalizeKnowledgeBases(dbKnowledgeBases);
+  const unifiedKb = extractUnifiedKnowledgeBase(kb);
+  const knowledgeContext = unifiedKb ? buildUnifiedKnowledgeContext(unifiedKb) : '';
+  const { baseCoren, baseSistema } = extractLegacyBases(kb);
+  const fallbackKnowledgeContext = [baseCoren, baseSistema].filter(Boolean).join('\n\n');
+  const resolvedKnowledgeContext = knowledgeContext || fallbackKnowledgeContext || '(não carregada)';
+  const baseCorenVar = baseCoren || resolvedKnowledgeContext;
+  const baseSistemaVar = baseSistema || resolvedKnowledgeContext;
 
   const safeHistory = (Array.isArray(history) ? history : [])
     .map(m => ({
@@ -339,19 +419,17 @@ async function generateChatReply({
 
   if (systemPromptTemplate && systemPromptTemplate.trim().length > 0) {
     systemContent = renderTemplate(systemPromptTemplate, {
-      BASE_COREN:   baseCoren,
-      BASE_SISTEMA: baseSist,
+      KNOWLEDGE_CONTEXT: resolvedKnowledgeContext,
+      BASE_COREN:   baseCorenVar,
+      BASE_SISTEMA: baseSistemaVar,
       MESSAGE:      message,
       HISTORY:      clipText(historyText, 6_000),
     }).trim();
   } else {
     systemContent = `Você é um assistente inteligente do Coren que ajuda operadores humanos.
 
-BASE COREN:
-${baseCoren}
-
-BASE SISTEMA:
-${baseSist}
+BASE DE CONHECIMENTO UNIFICADA:
+${resolvedKnowledgeContext}
 
 IMPORTANTE: Responda de forma natural, clara e útil. Use emojis quando apropriado.`;
   }
@@ -384,7 +462,7 @@ IMPORTANTE: Responda de forma natural, clara e útil. Use emojis quando apropria
     latencyMs,
     tokens:           usage?.total_tokens,
     model:            data.model,
-    hasKnowledgeBase: !!(baseCorenObj || baseSistObj),
+    hasKnowledgeBase: resolvedKnowledgeContext !== '(não carregada)',
     hasSystemPrompt:  systemPromptTemplate.trim().length > 0,
   });
 

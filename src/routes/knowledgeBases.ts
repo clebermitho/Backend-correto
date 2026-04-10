@@ -7,6 +7,7 @@ import { requireAuth, requireRole } from '../middleware/auth';
 import { log } from '../utils/audit';
 import logger from '../utils/logger';
 import { generateEmbedding } from '../services/openai';
+import { shouldValidateAsCanonicalKnowledgeBase, validateCanonicalKnowledgeBaseContent } from '../utils/knowledgeBaseContract';
 
 const router = Router();
 
@@ -53,6 +54,17 @@ router.post('/', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async (req: R
         else logger.warn({ event: 'kb.fetch_failed', sourceUrl: data.sourceUrl, status: resp.status });
       } catch (fetchErr) {
         logger.warn({ event: 'kb.fetch_error', sourceUrl: data.sourceUrl, err: (fetchErr as Error).message });
+      }
+    }
+
+    if (shouldValidateAsCanonicalKnowledgeBase({ name: data.name, sourceUrl: data.sourceUrl, content })) {
+      const validation = validateCanonicalKnowledgeBaseContent(content);
+      if (!validation.valid) {
+        res.status(422).json({
+          error: 'Conteúdo inválido para o contrato canônico base-conhecimento.json.',
+          details: validation.errors,
+        });
+        return;
       }
     }
 
@@ -117,6 +129,17 @@ router.post('/:id/sync', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), async
     } catch (fetchErr) {
       res.status(502).json({ error: `Erro de rede ao sincronizar: ${(fetchErr as Error).message}` });
       return;
+    }
+
+    if (shouldValidateAsCanonicalKnowledgeBase({ name: kb.name, sourceUrl: kb.sourceUrl, content })) {
+      const validation = validateCanonicalKnowledgeBaseContent(content);
+      if (!validation.valid) {
+        res.status(422).json({
+          error: 'Falha de validação do contrato canônico durante sincronização.',
+          details: validation.errors,
+        });
+        return;
+      }
     }
 
     const updated = await prisma.knowledgeBase.update({

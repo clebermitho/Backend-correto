@@ -88,6 +88,11 @@ docker-compose up -d       # sobe postgres + backend + admin
 | GET/POST/DELETE | `/api/templates` | Templates de resposta |
 | GET/POST | `/api/knowledge-bases` | Bases de conhecimento |
 
+### Contrato canônico de base de conhecimento
+- Fonte principal: `https://raw.githubusercontent.com/clebermitho/knowledge-base/main/base-conhecimento.json`
+- O backend prioriza contexto unificado (`KNOWLEDGE_CONTEXT`) para prompts.
+- Placeholders legados (`BASE_COREN`, `BASE_SISTEMA`) continuam aceitos para compatibilidade de overrides existentes.
+
 ---
 
 ## Arquitetura de segurança

@@ -6,6 +6,7 @@ import { prisma } from '../utils/prisma';
 import { cache } from '../utils/cache';
 import { log } from '../utils/audit';
 import logger from '../utils/logger';
+import { isCanonicalKnowledgeBaseContent, isCanonicalKnowledgeBaseSourceUrl } from '../utils/knowledgeBaseContract';
 
 const router = Router();
 
@@ -44,15 +45,34 @@ async function loadSettingsCached(orgId: string): Promise<Record<string, unknown
 }
 
 /** Load active knowledge bases for an org — 2-minute TTL */
-async function loadKBsCached(orgId: string): Promise<Array<{ name: string; content: unknown }>> {
+async function loadKBsCached(orgId: string): Promise<Array<{ name: string; content: unknown; sourceUrl: string | null }>> {
   const key = `kbs:${orgId}`;
-  const hit = cache.get<Array<{ name: string; content: unknown }>>(key);
+  const hit = cache.get<Array<{ name: string; content: unknown; sourceUrl: string | null }>>(key);
   if (hit) return hit;
   const kbs = await prisma.knowledgeBase.findMany({
     where: { organizationId: orgId, isActive: true },
+    select: { name: true, content: true, sourceUrl: true },
   });
   cache.set(key, kbs, 120);
   return kbs;
+}
+
+function resolveUnifiedKnowledgeBase(
+  kbs: Array<{ name: string; content: unknown; sourceUrl: string | null }>
+): Record<string, unknown> | undefined {
+  const bySource = kbs.find(
+    (kb): kb is { name: string; content: Record<string, unknown>; sourceUrl: string | null } =>
+      isCanonicalKnowledgeBaseSourceUrl(kb.sourceUrl) && isCanonicalKnowledgeBaseContent(kb.content)
+  );
+  if (bySource) return bySource.content;
+
+  const byStructure = kbs.find(
+    (kb): kb is { name: string; content: Record<string, unknown>; sourceUrl: string | null } =>
+      isCanonicalKnowledgeBaseContent(kb.content)
+  );
+  if (byStructure) return byStructure.content;
+
+  return undefined;
 }
 
 // ── Auxiliar: Verificar limite diário do usuário ─────────────
@@ -196,6 +216,11 @@ router.post('/suggestions', requireAuth, async (req: Request, res: Response, nex
       : '';
 
     const knowledgeBases = Object.fromEntries(kbs.map(kb => [kb.name, kb.content]));
+    const unifiedKnowledgeBase = resolveUnifiedKnowledgeBase(kbs);
+    if (unifiedKnowledgeBase) {
+      knowledgeBases['base-conhecimento'] = unifiedKnowledgeBase;
+      knowledgeBases.KNOWLEDGE_CONTEXT = unifiedKnowledgeBase;
+    }
 
     // Phase 3: Load learning data in parallel (depends on settings flags)
     const [topExamples, avoidPatterns] = await Promise.all([
@@ -339,6 +364,11 @@ router.post('/chat', requireAuth, async (req: Request, res: Response, next: Next
       : '';
 
     const dbKnowledgeBases = Object.fromEntries(kbs.map(kb => [kb.name, kb.content]));
+    const unifiedKnowledgeBase = resolveUnifiedKnowledgeBase(kbs);
+    if (unifiedKnowledgeBase) {
+      dbKnowledgeBases['base-conhecimento'] = unifiedKnowledgeBase;
+      dbKnowledgeBases.KNOWLEDGE_CONTEXT = unifiedKnowledgeBase;
+    }
 
     // Phase 3: OpenAI call
     const result = await generateChatReply({
