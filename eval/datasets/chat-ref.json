@@ -1,0 +1,29 @@
+[
+  {
+    "id": "chat-001",
+    "input": {
+      "message": "Como faço para regularizar minha situação junto ao Coren?",
+      "history": []
+    },
+    "expected": {
+      "mustNotContain": ["cliente"],
+      "minLength": 30
+    },
+    "tags": ["regularizacao"]
+  },
+  {
+    "id": "chat-002",
+    "input": {
+      "message": "Qual o valor da anuidade?",
+      "history": [
+        { "role": "user", "content": "Olá, preciso de ajuda" },
+        { "role": "assistant", "content": "Olá! Como posso ajudar?" }
+      ]
+    },
+    "expected": {
+      "mustNotContain": ["confirmamos o valor", "parcela de R$"],
+      "minLength": 20
+    },
+    "tags": ["anuidade", "financeiro"]
+  }
+]

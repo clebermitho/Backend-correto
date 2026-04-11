@@ -19,9 +19,6 @@ export type ErrorCode =
   | 'TIMEOUT'
   | 'INTERNAL_ERROR';
 
-/** Extract the traceId from the request (set by the correlation-id middleware in index.ts). */
-function getTraceId(req: Request): string | undefined {
-  const id = req.headers['x-request-id'];
   return typeof id === 'string' ? id : undefined;
 }
 
@@ -49,6 +46,9 @@ function errorBody(
 /**
  * Middleware global de tratamento de erros.
  * Deve ser registrado ÚLTIMO no app.use().
+ *
+ * Backward-compatible: existing routes receive `{ error, code, traceId }`.
+ * traceId is propagated from the correlation-id middleware (non-breaking addition).
  */
 export function errorHandler(err: unknown, req: Request, res: Response, _next: NextFunction): void {
   const traceId = getTraceId(req);
